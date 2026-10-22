@@ -34,6 +34,25 @@ const ACTIVE_USER_ID_KEY = "nextgen_active_user_id_v1";
 const LIVE_CHAT_KEY = "nextgen_live_chat_messages_v1";
 const NOTIFICATION_LOGS_KEY = "nextgen_order_notification_logs_v1";
 const APP_NOTIFICATIONS_KEY = "nextgen_app_notifications_v1";
+const DELETED_CUSTOMERS_KEY = "nextgen_deleted_customers_v1";
+
+function getDeletedCustomerPhones(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_CUSTOMERS_KEY);
+    if (!raw) return new Set();
+    return new Set(JSON.parse(raw));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveDeletedCustomerPhones(set: Set<string>): void {
+  try {
+    localStorage.setItem(DELETED_CUSTOMERS_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // ignore
+  }
+}
 
 export function isAdminSessionAuthorized(): boolean {
   try {
@@ -674,10 +693,72 @@ export function changeUserEmailWithPassword(params: {
 }
 
 export function deleteRegisteredUser(userId: string): void {
-  const users = getRegisteredUsers().filter(u => u.id !== userId);
-  saveRegisteredUsers(users);
+  const users = getRegisteredUsers();
+  const target = users.find(u => u.id === userId);
+  if (target && target.phone) {
+    const delSet = getDeletedCustomerPhones();
+    delSet.add(normalizePhoneKey(target.phone));
+    saveDeletedCustomerPhones(delSet);
+  }
+  const filtered = users.filter(u => u.id !== userId);
+  saveRegisteredUsers(filtered);
   if (getActiveUserAccount()?.id === userId) {
     setActiveUserAccount(null);
+  }
+}
+
+export function deleteCustomerAccount(params: {
+  id?: string;
+  phone?: string;
+  deleteOrders?: boolean;
+}): void {
+  const normPhone = params.phone ? normalizePhoneKey(params.phone) : "";
+
+  // 1. Remove from registered users by id or phone
+  const users = getRegisteredUsers();
+  const filteredUsers = users.filter(u => {
+    if (params.id && u.id === params.id) return false;
+    if (normPhone && u.phone && normalizePhoneKey(u.phone) === normPhone) return false;
+    return true;
+  });
+  saveRegisteredUsers(filteredUsers);
+
+  // 2. Clear active user/phone session if it matches the deleted customer
+  const activeUser = getActiveUserAccount();
+  if (
+    (params.id && activeUser?.id === params.id) ||
+    (normPhone && activeUser?.phone && normalizePhoneKey(activeUser.phone) === normPhone)
+  ) {
+    setActiveUserAccount(null);
+  }
+  const activePhone = getActiveCustomerPhone();
+  if (normPhone && activePhone && normalizePhoneKey(activePhone) === normPhone) {
+    setActiveCustomerPhone("");
+  }
+
+  // 3. Record phone in deleted customers set so guest orders don't recreate the customer row
+  if (normPhone) {
+    const delSet = getDeletedCustomerPhones();
+    delSet.add(normPhone);
+    saveDeletedCustomerPhones(delSet);
+  }
+
+  // 4. Optionally delete all orders belonging to this customer
+  if (params.deleteOrders) {
+    try {
+      const allOrders = getOrders();
+      const remainingOrders = allOrders.filter(o => {
+        if (params.id && o.userId === params.id) return false;
+        if (normPhone && o.phone && normalizePhoneKey(o.phone) === normPhone) return false;
+        return true;
+      });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(remainingOrders));
+      window.dispatchEvent(new Event("nextgen_orders_updated"));
+    } catch (err) {
+      console.error("Failed to delete customer orders", err);
+    }
+  } else {
+    window.dispatchEvent(new Event("nextgen_orders_updated"));
   }
 }
 
@@ -749,6 +830,7 @@ export function getCustomerAccount(phoneOrIdentifier: string): CustomerAccount {
 export function getAllCustomerAccounts(): CustomerAccount[] {
   const regUsers = getRegisteredUsers();
   const orders = getOrders();
+  const deletedPhones = getDeletedCustomerPhones();
   const seenPhones = new Set<string>();
   const accounts: CustomerAccount[] = [];
 
@@ -758,12 +840,14 @@ export function getAllCustomerAccounts(): CustomerAccount[] {
     accounts.push(getCustomerAccount(u.id));
   });
 
-  // 2. Add any guest order phones that aren't in registered accounts
+  // 2. Add any guest order phones that aren't in registered accounts and haven't been deleted by Admin
   const guestPhoneMap = new Map<string, string>();
   orders.forEach(o => {
     if (o.phone) {
       const k = normalizePhoneKey(o.phone);
-      if (k && !seenPhones.has(k)) guestPhoneMap.set(k, o.phone);
+      if (k && !seenPhones.has(k) && !deletedPhones.has(k)) {
+        guestPhoneMap.set(k, o.phone);
+      }
     }
   });
 
@@ -907,6 +991,14 @@ export function getOrders(): Order[] {
 
 export function saveOrder(order: Order): void {
   try {
+    if (order.phone) {
+      const delSet = getDeletedCustomerPhones();
+      const normKey = normalizePhoneKey(order.phone);
+      if (normKey && delSet.has(normKey)) {
+        delSet.delete(normKey);
+        saveDeletedCustomerPhones(delSet);
+      }
+    }
     const orders = getOrders();
     const nowIso = order.time || new Date().toISOString();
     const enrichedOrder: Order = {

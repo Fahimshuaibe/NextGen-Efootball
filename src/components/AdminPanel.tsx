@@ -29,6 +29,7 @@ import {
   updateRegisteredUser,
   registerUserAccount,
   deleteRegisteredUser,
+  deleteCustomerAccount,
   getAllChatConversations,
   getLiveChatMessages,
   sendLiveChatMessage,
@@ -230,6 +231,8 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
     password: string;
     emailVerified: boolean;
   } | null>(null);
+  const [deletingCustomer, setDeletingCustomer] = useState<CustomerAccount | null>(null);
+  const [alsoDeleteCustomerOrders, setAlsoDeleteCustomerOrders] = useState<boolean>(false);
   const [userAdminMsg, setUserAdminMsg] = useState("");
 
   // Live Chat inside Admin Panel
@@ -2042,20 +2045,57 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                     </label>
                   </div>
 
-                  <div className="flex justify-end gap-2 pt-1">
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                     <button
                       type="button"
-                      onClick={() => setEditingUser(null)}
-                      className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold cursor-pointer"
+                      onClick={() => {
+                        const targetCust = customers.find((c) => c.id === editingUser.id || (editingUser.phone && c.phone === editingUser.phone));
+                        setDeletingCustomer(
+                          targetCust || {
+                            id: editingUser.id,
+                            name: editingUser.name,
+                            username: editingUser.username,
+                            email: editingUser.email,
+                            phone: editingUser.phone,
+                            totalOrders: 0,
+                            completedOrders: 0,
+                            cancelledOrders: 0,
+                            processingOrders: 0,
+                            pendingOrders: 0,
+                            totalSpent: 0,
+                            failedAttempts: 0,
+                            isBlocked: false,
+                            referralCode: editingUser.phone,
+                            referredFriendsCount: 0,
+                            completedReferralsCount: 0,
+                            earnedReferralBonus: 0,
+                            usedReferralBonus: 0,
+                            availableReferralBonus: 0,
+                          }
+                        );
+                        setAlsoDeleteCustomerOrders(false);
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer transition"
                     >
-                      বাতিল
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>এই কাস্টমার ডিলিট করুন</span>
                     </button>
-                    <button
-                      type="submit"
-                      className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-black font-extrabold text-xs cursor-pointer"
-                    >
-                      ইউজার আপডেট সেভ করুন
-                    </button>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditingUser(null)}
+                        className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold cursor-pointer"
+                      >
+                        বাতিল
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-black font-extrabold text-xs cursor-pointer"
+                      >
+                        ইউজার আপডেট সেভ করুন
+                      </button>
+                    </div>
                   </div>
                 </form>
               )}
@@ -2208,6 +2248,18 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                                     চ্যাট
                                   </button>
                                 )}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDeletingCustomer(c);
+                                    setAlsoDeleteCustomerOrders(false);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 font-bold cursor-pointer border border-rose-500/30 inline-flex items-center gap-1 transition"
+                                  title="কাস্টমার তালিকা থেকে ডিলিট করুন"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>ডিলিট</span>
+                                </button>
                               </div>
                             </td>
                           </tr>
@@ -2217,6 +2269,81 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                   </table>
                 </div>
               </div>
+
+              {/* Delete Customer Confirmation Modal */}
+              {deletingCustomer && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+                  <div className="w-full max-w-md rounded-2xl bg-slate-900 border-2 border-rose-500/50 p-5 space-y-4 shadow-2xl">
+                    <div className="flex items-start gap-3">
+                      <div className="w-11 h-11 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-400 flex items-center justify-center shrink-0">
+                        <Trash2 className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-sm sm:text-base font-extrabold text-white">
+                          কাস্টমার ডিলিট নিশ্চিত করুন
+                        </h4>
+                        <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                          আপনি কি নিশ্চিতভাবে কাস্টমার{" "}
+                          <b className="text-cyan-300">{deletingCustomer.name}</b>{" "}
+                          {deletingCustomer.phone ? `(${formatBdPhonePretty(deletingCustomer.phone)})` : ""} কে কাস্টমার তালিকা থেকে ডিলিট করতে চান?
+                        </p>
+                      </div>
+                    </div>
+
+                    {deletingCustomer.totalOrders > 0 && (
+                      <label className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-950 border border-rose-500/30 text-xs text-rose-200 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={alsoDeleteCustomerOrders}
+                          onChange={(e) => setAlsoDeleteCustomerOrders(e.target.checked)}
+                          className="mt-0.5 w-4 h-4 accent-rose-500 rounded cursor-pointer shrink-0"
+                        />
+                        <span>
+                          এই কাস্টমারের পূর্বের সকল অর্ডারও মুছে ফেলুন ({toBn(deletingCustomer.totalOrders)} টি অর্ডার)
+                        </span>
+                      </label>
+                    )}
+
+                    <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeletingCustomer(null);
+                          setAlsoDeleteCustomerOrders(false);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition cursor-pointer"
+                      >
+                        বাতিল করুন
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const deletedName = deletingCustomer.name || deletingCustomer.phone || "কাস্টমার";
+                          deleteCustomerAccount({
+                            id: deletingCustomer.id,
+                            phone: deletingCustomer.phone,
+                            deleteOrders: alsoDeleteCustomerOrders,
+                          });
+                          if (editingUser && (editingUser.id === deletingCustomer.id || editingUser.phone === deletingCustomer.phone)) {
+                            setEditingUser(null);
+                          }
+                          setDeletingCustomer(null);
+                          setAlsoDeleteCustomerOrders(false);
+                          loadData();
+                          setUserAdminMsg(
+                            `🗑️ কাস্টমার "${deletedName}" কে সফলভাবে কাস্টমার তালিকা থেকে মুছে ফেলা হয়েছে!`
+                          );
+                          setTimeout(() => setUserAdminMsg(""), 4000);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-lg shadow-rose-500/20 transition cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>হ্যাঁ, ডিলিট করুন</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
