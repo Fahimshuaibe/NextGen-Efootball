@@ -97,6 +97,7 @@ import {
   sendTestDiscordAlert,
   autoDiscoverTelegramChatId,
   sendTestGreenApiAlert,
+  checkGreenApiInstanceStatus,
   dispatchOrderStatusNotification,
 } from "../utils/autoNotify";
 import {
@@ -193,6 +194,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
   const [discordFeedback, setDiscordFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
   const [detectingChatId, setDetectingChatId] = useState(false);
   const [testingGreenApi, setTestingGreenApi] = useState(false);
+  const [checkingGreenApiStatus, setCheckingGreenApiStatus] = useState(false);
   const [greenApiFeedback, setGreenApiFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
   const [expandedLogOrderNo, setExpandedLogOrderNo] = useState<string | null>(null);
   const [manualBlockPhone, setManualBlockPhone] = useState("");
@@ -2677,7 +2679,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                       </div>
 
                       {/* WhatsApp System A: Green-API (Dedicated WhatsApp Gateway - No "Server Full" Issues) */}
-                      <div className="p-3.5 rounded-xl bg-slate-950 border border-emerald-500/30 space-y-2.5">
+                      <div className="p-3.5 rounded-xl bg-slate-950 border border-emerald-500/30 space-y-3">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-extrabold text-emerald-300">
                             🟢 বিকল্প ১: Green-API (স্থায়ী WhatsApp গেটওয়ে - কোনো সার্ভার ফুল সমস্যা নেই)
@@ -2692,9 +2694,15 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                             <ExternalLink className="w-3 h-3" />
                           </a>
                         </div>
-                        <p className="text-[11px] text-slate-400 leading-relaxed">
-                          Green-API আপনার নিজের WhatsApp নম্বরের সাথে QR কোড স্ক্যান করে সরাসরি সংযুক্ত হয়, তাই CallMeBot-এর মতো "Server is full" বা লিমিটেশন থাকে না।
-                        </p>
+                        
+                        <div className="p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-500/20 text-[11px] text-slate-300 space-y-1">
+                          <p className="font-bold text-emerald-200">📌 কীভাবে ১ মিনিটে কানেক্ট করবেন:</p>
+                          <ol className="list-decimal list-inside space-y-0.5 text-slate-400">
+                            <li><a href="https://green-api.com" target="_blank" rel="noreferrer" className="text-cyan-300 underline font-semibold">green-api.com</a> এ ফ্রি একাউন্ট খুলে <b>Free Developer Instance</b> তৈরি করুন।</li>
+                            <li>গ্রিন-এপিআই ড্যাশবোর্ডে <b>QR code</b> অপশনে যান এবং আপনার WhatsApp অ্যাপ দিয়ে QR স্ক্যান করুন (স্ট্যাটাস <b>Authorized</b> হবে)।</li>
+                            <li>ড্যাশবোর্ড থেকে <b>IdInstance</b> এবং <b>ApiTokenInstance</b> কপি করে নিচের ঘরে পেস্ট করুন।</li>
+                          </ol>
+                        </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1">
                           <div>
@@ -2707,7 +2715,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                               onChange={(e) =>
                                 setShopSettingsState({ ...shopSettings, greenApiIdInstance: e.target.value.trim() })
                               }
-                              placeholder="যেমন: 1101xxxxxx"
+                              placeholder="যেমন: 1101xxxxxx বা 7107xxxxxx"
                               className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-emerald-200 font-mono text-xs focus:outline-none focus:border-emerald-400"
                             />
                           </div>
@@ -2722,7 +2730,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                               onChange={(e) =>
                                 setShopSettingsState({ ...shopSettings, greenApiApiToken: e.target.value.trim() })
                               }
-                              placeholder="যেমন: c94b7e8d..."
+                              placeholder="যেমন: 7a9e58d821354..."
                               className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-emerald-200 font-mono text-xs focus:outline-none focus:border-emerald-400"
                             />
                           </div>
@@ -2730,24 +2738,41 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
 
                         {greenApiFeedback && (
                           <div
-                            className={`p-2 rounded-lg text-xs font-semibold flex items-center justify-between ${
+                            className={`p-2.5 rounded-lg text-xs font-semibold flex items-center justify-between ${
                               greenApiFeedback.ok
                                 ? "bg-emerald-950/80 border border-emerald-500/50 text-emerald-300"
                                 : "bg-rose-950/80 border border-rose-500/50 text-rose-300"
                             }`}
                           >
-                            <span>{greenApiFeedback.msg}</span>
+                            <span className="leading-relaxed">{greenApiFeedback.msg}</span>
                             <button
                               type="button"
                               onClick={() => setGreenApiFeedback(null)}
-                              className="text-slate-400 hover:text-white ml-2 text-xs"
+                              className="text-slate-400 hover:text-white ml-2 text-xs shrink-0 cursor-pointer"
                             >
                               ✕
                             </button>
                           </div>
                         )}
 
-                        <div className="flex justify-end pt-1">
+                        <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            disabled={checkingGreenApiStatus || !shopSettings.greenApiIdInstance?.trim()}
+                            onClick={async () => {
+                              setCheckingGreenApiStatus(true);
+                              setGreenApiFeedback(null);
+                              const res = await checkGreenApiInstanceStatus(
+                                shopSettings.greenApiIdInstance || "",
+                                shopSettings.greenApiApiToken || ""
+                              );
+                              setCheckingGreenApiStatus(false);
+                              setGreenApiFeedback({ ok: res.ok, msg: res.message });
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-emerald-500/30 text-emerald-300 font-bold text-xs cursor-pointer transition disabled:opacity-50"
+                          >
+                            {checkingGreenApiStatus ? "স্ট্যাটাস চেক হচ্ছে..." : "🔍 QR/কানেকশন স্ট্যাটাস চেক"}
+                          </button>
                           <button
                             type="button"
                             disabled={testingGreenApi}

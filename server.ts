@@ -245,13 +245,17 @@ async function startServer() {
         }),
       });
 
-      const data = await greenRes.json();
+      const data = await greenRes.json().catch(() => ({}));
       if (greenRes.ok && data.idMessage) {
         return res.json({ ok: true, data });
       } else {
+        let errorMsg = data.message || "Green-API বার্তা পাঠাতে পারেনি।";
+        if (greenRes.status === 401 || greenRes.status === 403) {
+          errorMsg = "Green-API IdInstance অথবা ApiTokenInstance ভুল হতে পারে। সঠিক ক্রেডেনশিয়াল দিন।";
+        }
         return res.status(200).json({
           ok: false,
-          error: data.message || "Green-API বার্তা পাঠাতে পারেনি। ক্রেডেনশিয়াল সঠিক কিনা যাচাই করুন।",
+          error: errorMsg,
         });
       }
     } catch (err: any) {

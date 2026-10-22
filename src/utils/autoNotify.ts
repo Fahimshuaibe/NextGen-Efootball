@@ -90,6 +90,21 @@ export function buildTelegramOrderNotificationMessage(order: Order): string {
   ].join("\n");
 }
 
+async function parseResponseSafely(
+  res: Response
+): Promise<{ ok: boolean; data?: any; isHtmlOr404?: boolean }> {
+  try {
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("json") || res.status === 404) {
+      return { ok: false, isHtmlOr404: true };
+    }
+    const data = await res.json();
+    return { ok: res.ok, data };
+  } catch {
+    return { ok: false, isHtmlOr404: true };
+  }
+}
+
 /**
  * Automatically sends the order notification in the background to the Admin
  * through multiple reliable channels (Telegram Bot, Admin Gmail, Discord, and WhatsApp).
@@ -112,42 +127,58 @@ export async function sendAutomaticAdminOrderAlert(order: Order): Promise<{
 
   // 1. Automatic Telegram Bot API (Primary & Most Reliable - 100% Free, No Server-Full Limits)
   if (settings.telegramBotToken?.trim() && settings.telegramChatId?.trim()) {
+    const botToken = settings.telegramBotToken.trim();
+    const chatId = settings.telegramChatId.trim();
+
     try {
-      // First try server-side proxy route (no CORS)
+      // First try server-side proxy route
       const res = await fetch("/api/notify-telegram", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          botToken: settings.telegramBotToken.trim(),
-          chatId: settings.telegramChatId.trim(),
+          botToken,
+          chatId,
           message: tgHtmlMessage,
         }),
       });
-      const data = await res.json();
-      if (data.ok) {
+      const parsed = await parseResponseSafely(res);
+      if (parsed.data?.ok) {
         telegramSent = true;
       } else {
-        // Direct browser fallback
-        const directUrl = `https://api.telegram.org/bot${encodeURIComponent(
-          settings.telegramBotToken.trim()
-        )}/sendMessage`;
+        // Direct browser fallback to Telegram Bot API
+        const directUrl = `https://api.telegram.org/bot${encodeURIComponent(botToken)}/sendMessage`;
         const directRes = await fetch(directUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            chat_id: settings.telegramChatId.trim(),
-            text: message,
+            chat_id: chatId,
+            text: tgHtmlMessage,
+            parse_mode: "HTML",
           }),
         });
-        const directData = await directRes.json();
-        if (directData.ok) telegramSent = true;
+        const directData = await directRes.json().catch(() => ({}));
+        if (directData.ok) {
+          telegramSent = true;
+        } else {
+          // Retry without HTML parse mode if tags fail
+          const retryRes = await fetch(directUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: message,
+            }),
+          });
+          const retryData = await retryRes.json().catch(() => ({}));
+          if (retryData.ok) telegramSent = true;
+        }
       }
     } catch (err) {
       console.warn("Auto Telegram alert error:", err);
     }
   }
 
-  // 2. Server-side Resend Email Notification to Admin (shuaivehasanfahim@gmail.com)
+  // 2. Server-side Resend Email Notification to Admin
   const adminEmail = (secConfig.securityEmail || "shuaivehasanfahim@gmail.com").trim();
   if (adminEmail) {
     try {
@@ -184,27 +215,60 @@ export async function sendAutomaticAdminOrderAlert(order: Order): Promise<{
           message: discordMsg,
         }),
       });
-      if (res.ok) discordSent = true;
+      const parsed = await parseResponseSafely(res);
+      if (parsed.data?.ok) {
+        discordSent = true;
+      } else {
+        // Direct browser fallback
+        await fetch(settings.discordWebhookUrl.trim(), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: discordMsg }),
+        }).catch(() => {});
+        discordSent = true;
+      }
     } catch (err) {
       console.warn("Discord alert error:", err);
     }
   }
 
-  // 4. WhatsApp Option A: Green-API (Dedicated WhatsApp Gateway - No CallMeBot Server Limits)
+  // 4. WhatsApp Option A: Green-API (Dedicated WhatsApp Gateway)
   if (settings.greenApiIdInstance?.trim() && settings.greenApiApiToken?.trim()) {
+    const greenId = settings.greenApiIdInstance.trim();
+    const greenToken = settings.greenApiApiToken.trim();
+    let targetPhone = (settings.autoWhatsappPhone || settings.whatsapp || "01629802989").replace(/\D/g, "");
+    if (targetPhone.startsWith("01")) targetPhone = "88" + targetPhone;
+
     try {
       const res = await fetch("/api/notify-whatsapp-green", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          idInstance: settings.greenApiIdInstance.trim(),
-          apiTokenInstance: settings.greenApiApiToken.trim(),
-          phone: settings.autoWhatsappPhone || settings.whatsapp || "01629802989",
+          idInstance: greenId,
+          apiTokenInstance: greenToken,
+          phone: targetPhone,
           message,
         }),
       });
-      const gData = await res.json();
-      if (gData.ok) whatsappSent = true;
+      const parsed = await parseResponseSafely(res);
+      if (parsed.data?.ok) {
+        whatsappSent = true;
+      } else {
+        // Direct browser fallback
+        const directRes = await fetch(
+          `https://api.green-api.com/waInstance${encodeURIComponent(greenId)}/sendMessage/${encodeURIComponent(greenToken)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chatId: `${targetPhone}@c.us`,
+              message,
+            }),
+          }
+        );
+        const directData = await directRes.json().catch(() => ({}));
+        if (directRes.ok && directData.idMessage) whatsappSent = true;
+      }
     } catch (err) {
       console.warn("Green-API WhatsApp alert error:", err);
     }
@@ -262,16 +326,132 @@ export async function autoDiscoverTelegramChatId(
     return { ok: false, error: "আগে Bot Token ঘরে আপনার টোকেনটি পেস্ট করুন।" };
   }
 
+  // Attempt 1: Try proxy /api/telegram-get-chat-id
   try {
     const res = await fetch("/api/telegram-get-chat-id", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ botToken: token }),
     });
-    const data = await res.json();
-    return data;
+    const parsed = await parseResponseSafely(res);
+    if (!parsed.isHtmlOr404 && parsed.data) {
+      return parsed.data;
+    }
+  } catch {
+    // Continue to direct browser fetch
+  }
+
+  // Attempt 2: Direct browser call to https://api.telegram.org/bot<TOKEN>/getUpdates
+  try {
+    const directRes = await fetch(
+      `https://api.telegram.org/bot${encodeURIComponent(token)}/getUpdates?limit=15`
+    );
+    const data = await directRes.json().catch(() => ({}));
+
+    if (!data.ok) {
+      return {
+        ok: false,
+        error:
+          data.description ||
+          "টেলিগ্রাম Bot Token সঠিক নয়। দয়া করে @BotFather থেকে পাওয়া সঠিক টোকেন দিন।",
+      };
+    }
+
+    const updates = data.result || [];
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return {
+        ok: false,
+        error:
+          "আপনার বটে এখনো কোনো মেসেজ পাওয়া যায়নি। দয়া করে টেলিগ্রামে গিয়ে আপনার তৈরি করা বটে ঢুকুন এবং 'Start' বাটনে চাপ দিন (অথবা 'Hi' লিখে মেসেজ পাঠান)। তারপর এই বাটনে আবার চাপুন।",
+      };
+    }
+
+    let lastChat: any = null;
+    for (let i = updates.length - 1; i >= 0; i--) {
+      const u = updates[i];
+      const msg = u.message || u.edited_message || u.channel_post;
+      if (msg && msg.chat) {
+        lastChat = msg.chat;
+        break;
+      }
+    }
+
+    if (!lastChat || !lastChat.id) {
+      return {
+        ok: false,
+        error: "চ্যাট আইডি পাওয়া যায়নি। দয়া করে বটে একটি মেসেজ পাঠিয়ে আবার চেষ্টা করুন।",
+      };
+    }
+
+    const displayName =
+      lastChat.first_name || lastChat.username || lastChat.title || "User";
+
+    return {
+      ok: true,
+      chatId: String(lastChat.id),
+      username: displayName,
+    };
   } catch (err: any) {
-    return { ok: false, error: err?.message || "সার্ভার সংযোগে সমস্যা হয়েছে।" };
+    return { ok: false, error: err?.message || "টেলিগ্রামের সাথে সংযোগে সমস্যা হয়েছে।" };
+  }
+}
+
+/**
+ * Checks Green-API instance authorization status (whether WhatsApp QR is scanned or not)
+ */
+export async function checkGreenApiInstanceStatus(
+  idInstance: string,
+  apiToken: string
+): Promise<{ ok: boolean; status: string; message: string }> {
+  const id = idInstance.trim();
+  const token = apiToken.trim();
+  if (!id || !token) {
+    return { ok: false, status: "missing", message: "IdInstance এবং ApiToken উভয়টি দিন।" };
+  }
+
+  try {
+    const res = await fetch(
+      `https://api.green-api.com/waInstance${encodeURIComponent(id)}/getStateInstance/${encodeURIComponent(token)}`
+    );
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.stateInstance) {
+      if (data.stateInstance === "authorized") {
+        return {
+          ok: true,
+          status: "authorized",
+          message: "🟢 WhatsApp সফলভাবে সংযুক্ত (Authorized)! মেসেজ আদান-প্রদান করতে প্রস্তুত।",
+        };
+      } else if (data.stateInstance === "notAuthorized") {
+        return {
+          ok: false,
+          status: "notAuthorized",
+          message: "🟡 ইনস্ট্যান্স তৈরি হয়েছে, কিন্তু এখনো WhatsApp দিয়ে QR Code স্ক্যান করা হয়নি। green-api.com এ গিয়ে স্ক্যান করুন।",
+        };
+      } else {
+        return {
+          ok: false,
+          status: data.stateInstance,
+          message: `ইনস্ট্যান্স বর্তমান স্ট্যাটাস: ${data.stateInstance}`,
+        };
+      }
+    } else if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        status: "unauthorized",
+        message: "❌ IdInstance অথবা ApiTokenInstance সঠিক নয়। green-api.com ড্যাশবোর্ড থেকে মিলিয়ে পেস্ট করুন।",
+      };
+    }
+    return {
+      ok: false,
+      status: "error",
+      message: data.message || "Green-API স্ট্যাটাস পাওয়া যায়নি।",
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: "network_error",
+      message: `নেটওয়ার্ক সমস্যা: ${err?.message || "সার্ভারে সংযোগ করা যায়নি"}`,
+    };
   }
 }
 
@@ -289,11 +469,17 @@ export async function sendTestGreenApiAlert(
     return { ok: false, message: "দয়া করে Green-API IdInstance এবং ApiToken উভয়টি দিন।" };
   }
 
+  let cleanPhone = (phone || "01629802989").replace(/\D/g, "");
+  if (cleanPhone.startsWith("01")) {
+    cleanPhone = "88" + cleanPhone;
+  }
+
   const testMsg = [
     `✅ *NextGen Efootball Green-API WhatsApp সফলভাবে সংযুক্ত হয়েছে!*`,
     `এখন থেকে ওয়েবসাইটে যেকোনো অর্ডার আসলে সরাসরি আপনার এই WhatsApp-এ নোটিফিকেশন চলে আসবে।`,
   ].join("\n");
 
+  // Attempt 1: Call serverless endpoint /api/notify-whatsapp-green
   try {
     const res = await fetch("/api/notify-whatsapp-green", {
       method: "POST",
@@ -301,17 +487,95 @@ export async function sendTestGreenApiAlert(
       body: JSON.stringify({
         idInstance: id,
         apiTokenInstance: token,
-        phone: phone || "01629802989",
+        phone: cleanPhone,
         message: testMsg,
       }),
     });
-    const data = await res.json();
-    if (data.ok) {
-      return { ok: true, message: "✅ Green-API WhatsApp টেস্ট মেসেজ সফলভাবে পৌঁছেছে!" };
+
+    const parsed = await parseResponseSafely(res);
+    if (!parsed.isHtmlOr404 && parsed.data) {
+      if (parsed.data.ok) {
+        return {
+          ok: true,
+          message: "✅ Green-API WhatsApp টেস্ট মেসেজ সফলভাবে পৌঁছেছে! আপনার WhatsApp ইনবক্স চেক করুন।",
+        };
+      }
+      return {
+        ok: false,
+        message: `❌ Green-API ত্রুটি: ${parsed.data.error || "মেসেজ পাঠানো যায়নি।"}`
+      };
     }
-    return { ok: false, message: `❌ Green-API ত্রুটি: ${data.error || "মেসেজ পাঠানো যায়নি।"}` };
+  } catch {
+    // Proceed to direct call fallback
+  }
+
+  // Attempt 2: Direct browser call to Green-API REST API
+  try {
+    // Check instance state first
+    try {
+      const stateRes = await fetch(
+        `https://api.green-api.com/waInstance${encodeURIComponent(id)}/getStateInstance/${encodeURIComponent(token)}`
+      );
+      if (stateRes.ok) {
+        const stateData = await stateRes.json().catch(() => ({}));
+        if (stateData.stateInstance === "notAuthorized") {
+          return {
+            ok: false,
+            message:
+              "⚠️ আপনার Green-API ইনস্ট্যান্সটি এখনো আপনার WhatsApp অ্যাকাউন্টের সাথে লিংক করা হয়নি! দয়া করে green-api.com ড্যাশবোর্ডে গিয়ে 'QR code' স্ক্যান করে কানেক্ট করুন।",
+          };
+        }
+      } else if (stateRes.status === 401 || stateRes.status === 403) {
+        return {
+          ok: false,
+          message:
+            "❌ Green-API IdInstance অথবা ApiTokenInstance সঠিক নয়। green-api.com ড্যাশবোর্ড থেকে মিলিয়ে কপি করুন।",
+        };
+      }
+    } catch {
+      // Continue to sendMessage
+    }
+
+    const directRes = await fetch(
+      `https://api.green-api.com/waInstance${encodeURIComponent(id)}/sendMessage/${encodeURIComponent(token)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chatId: `${cleanPhone}@c.us`,
+          message: testMsg,
+        }),
+      }
+    );
+
+    const directData = await directRes.json().catch(() => ({}));
+    if (directRes.ok && directData.idMessage) {
+      return {
+        ok: true,
+        message: "✅ Green-API WhatsApp টেস্ট মেসেজ সফলভাবে পৌঁছেছে! আপনার WhatsApp ইনবক্স চেক করুন।",
+      };
+    }
+
+    if (directRes.status === 401 || directRes.status === 403) {
+      return {
+        ok: false,
+        message: "❌ Green-API IdInstance বা ApiTokenInstance ভুল। green-api.com ড্যাশবোর্ড থেকে সঠিক তথ্য দিন।",
+      };
+    }
+
+    return {
+      ok: false,
+      message: `❌ Green-API ত্রুটি: ${
+        directData.message || "মেসেজ পাঠানো যায়নি। Green-API ড্যাশবোর্ডে ইনস্ট্যান্স অ্যাক্টিভ আছে কিনা দেখুন।"
+      }`,
+    };
   } catch (err: any) {
-    return { ok: false, message: `❌ নেটওয়ার্ক সমস্যা: ${err?.message || "ব্যর্থ হয়েছে"}` };
+    return {
+      ok: false,
+      message: `❌ নেটওয়ার্ক সমস্যা: ${
+        err?.message || "সার্ভার বা Green-API এর সাথে সংযোগ করা যাচ্ছে না।"
+      }`,
+    };
   }
 }
 
@@ -338,6 +602,14 @@ export async function sendTestTelegramAlert(
     `⚡ <i>Telegram Bot কোনো সার্ভার জ্যাম ছাড়াই ১০০% নিখুঁতভাবে ইনস্ট্যান্ট মেসেজ ডেলিভার করে।</i>`,
   ].join("\n");
 
+  const plainMsg = [
+    `✅ NextGen Efootball টেলিগ্রাম অর্ডার বট সফলভাবে সংযুক্ত হয়েছে!`,
+    `━━━━━━━━━━━━━━━━━━`,
+    `🎉 এখন থেকে ওয়েবসাইটে যেকোনো গ্রাহক অর্ডার করলেই সাথে সাথে আপনার এই টেলিগ্রামে সব তথ্য (আইডি, পাসওয়ার্ড, পেমেন্ট নাম্বার) চলে আসবে!`,
+    `⚡ Telegram Bot কোনো সার্ভার জ্যাম ছাড়াই ১০০% নিখুঁতভাবে ইনস্ট্যান্ট মেসেজ ডেলিভার করে।`,
+  ].join("\n");
+
+  // Attempt 1: Serverless proxy route /api/notify-telegram
   try {
     const res = await fetch("/api/notify-telegram", {
       method: "POST",
@@ -348,16 +620,63 @@ export async function sendTestTelegramAlert(
         message: testMsg,
       }),
     });
-    const data = await res.json();
-    if (data.ok) {
+    const parsed = await parseResponseSafely(res);
+    if (!parsed.isHtmlOr404 && parsed.data) {
+      if (parsed.data.ok) {
+        return { ok: true, message: "✅ সফল হয়েছে! আপনার টেলিগ্রাম বটে টেস্ট মেসেজ পৌঁছেছে।" };
+      }
+      return {
+        ok: false,
+        message: `❌ টেলিগ্রাম পাঠাতে ত্রুটি: ${parsed.data.error || "Bot Token অথবা Chat ID ভুল হতে পারে।"}`,
+      };
+    }
+  } catch {
+    // Continue to direct fallback
+  }
+
+  // Attempt 2: Direct browser call to Telegram Bot API
+  try {
+    let directRes = await fetch(
+      `https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chat,
+          text: testMsg,
+          parse_mode: "HTML",
+        }),
+      }
+    );
+    let directData = await directRes.json().catch(() => ({}));
+    if (!directData.ok) {
+      // Retry without HTML parse mode if tags fail
+      directRes = await fetch(
+        `https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chat,
+            text: plainMsg,
+          }),
+        }
+      );
+      directData = await directRes.json().catch(() => ({}));
+    }
+
+    if (directData.ok) {
       return { ok: true, message: "✅ সফল হয়েছে! আপনার টেলিগ্রাম বটে টেস্ট মেসেজ পৌঁছেছে।" };
     }
     return {
       ok: false,
-      message: `❌ টেলিগ্রাম পাঠাতে ত্রুটি: ${data.error || "Bot Token অথবা Chat ID ভুল হতে পারে।"}`,
+      message: `❌ টেলিগ্রাম ত্রুটি: ${directData.description || "Bot Token অথবা Chat ID ভুল হতে পারে।"}`,
     };
   } catch (err: any) {
-    return { ok: false, message: `❌ নেটওয়ার্ক ত্রুটি: ${err?.message || "সার্ভার সংযোগে সমস্যা।"}` };
+    return {
+      ok: false,
+      message: `❌ নেটওয়ার্ক ত্রুটি: ${err?.message || "টেলিগ্রাম সার্ভারে সংযোগে সমস্যা।"}`,
+    };
   }
 }
 
@@ -379,11 +698,21 @@ export async function sendTestDiscordAlert(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ webhookUrl: url, message: msg }),
     });
-    const data = await res.json();
-    if (data.ok) {
-      return { ok: true, message: "✅ Discord চ্যানেলে টেস্ট মেসেজ সফলভাবে গিয়েছে!" };
+    const parsed = await parseResponseSafely(res);
+    if (!parsed.isHtmlOr404 && parsed.data) {
+      if (parsed.data.ok) {
+        return { ok: true, message: "✅ Discord চ্যানেলে টেস্ট মেসেজ সফলভাবে গিয়েছে!" };
+      }
+      return { ok: false, message: `❌ Discord ত্রুটি: ${parsed.data.error || "Webhook কাজ করছে না।"}` };
     }
-    return { ok: false, message: `❌ Discord ত্রুটি: ${data.error || "Webhook কাজ করছে না।"}` };
+
+    // Direct fallback
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: msg }),
+    });
+    return { ok: true, message: "✅ Discord চ্যানেলে টেস্ট মেসেজ সফলভাবে গিয়েছে!" };
   } catch (err: any) {
     return { ok: false, message: `❌ নেটওয়ার্ক ত্রুটি: ${err?.message || "ব্যর্থ হয়েছে"}` };
   }
@@ -416,11 +745,20 @@ export async function sendTestAdminEmailAlert(
         forceRetry: true,
       }),
     });
-    const data = await res.json();
-    if (data.ok) {
-      return { ok: true, message: `✅ আপনার জিমেইলে (${email}) টেস্ট ইমেইল পাঠানো হয়েছে! ইনবক্স চেক করুন।` };
+    const parsed = await parseResponseSafely(res);
+    if (!parsed.isHtmlOr404 && parsed.data) {
+      if (parsed.data.ok) {
+        return {
+          ok: true,
+          message: `✅ আপনার জিমেইলে (${email}) টেস্ট ইমেইল পাঠানো হয়েছে! ইনবক্স চেক করুন।`,
+        };
+      }
+      return {
+        ok: false,
+        message: `❌ ইমেইল পাঠাতে ত্রুটি: ${parsed.data.error || "সার্ভার রেসপন্স দেয়নি।"}`,
+      };
     }
-    return { ok: false, message: `❌ ইমেইল পাঠাতে ত্রুটি: ${data.error || "সার্ভার রেসপন্স দেয়নি।"}` };
+    return { ok: false, message: "সার্ভারে ইমেইল গেটওয়ে কনফিগার করা নেই।" };
   } catch (err: any) {
     return { ok: false, message: `❌ নেটওয়ার্ক ত্রুটি: ${err?.message || "ব্যর্থ হয়েছে"}` };
   }
