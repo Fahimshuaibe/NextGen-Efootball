@@ -11,6 +11,7 @@ import {
 } from "../types";
 import { 
   getOrders, 
+  saveOrder,
   updateOrderStatus, 
   deleteOrder, 
   updateOrderDetails,
@@ -27,6 +28,7 @@ import {
   blockUserManual,
   unblockUser,
   recordFailedStrike,
+  resetCustomerStrikes,
   getAllCustomerAccounts,
   updateRegisteredUser,
   registerUserAccount,
@@ -36,10 +38,14 @@ import {
   getNotificationLogs,
   getAppNotifications,
   broadcastAdminAnnouncement,
+  sendDirectCustomerNotification,
   deleteAppNotification,
   getPaymentOptions,
   updatePaymentOption,
-  togglePaymentMethod
+  togglePaymentMethod,
+  exportFullStoreBackup,
+  importFullStoreBackup,
+  forceSyncAllToServerAndCloud
 } from "../utils/storage";
 import { 
   playOrderNotificationSound, 
@@ -98,7 +104,10 @@ import {
   Flame,
   Sparkles,
   Plus,
-  Minus
+  Minus,
+  Download,
+  Upload,
+  UserPlus
 } from "lucide-react";
 import {
   sendTestAutoWhatsappAlert,
@@ -178,6 +187,44 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
     selectedAddProductId: string;
   } | null>(null);
 
+  // Full Order Details Edit Modal State
+  const [editingFullOrder, setEditingFullOrder] = useState<{
+    orderNo: string;
+    name: string;
+    phone: string;
+    otpWhatsapp: string;
+    konamiIdOrEmail: string;
+    konamiPassword: string;
+    paymentMethod: string;
+    senderNumber: string;
+    trxId: string;
+    adminNotes: string;
+    customerNote: string;
+  } | null>(null);
+
+  // Manual Order Creation Modal State
+  const [creatingManualOrder, setCreatingManualOrder] = useState<{
+    name: string;
+    phone: string;
+    konamiIdOrEmail: string;
+    konamiPassword: string;
+    productId: string;
+    paymentMethod: string;
+    senderNumber: string;
+    trxId: string;
+    status: OrderStatus;
+    adminNotes: string;
+  } | null>(null);
+
+  // Direct Customer In-App Notification Modal State
+  const [directNotifTarget, setDirectNotifTarget] = useState<{
+    phone: string;
+    customerName: string;
+    orderNo?: string;
+    title: string;
+    message: string;
+  } | null>(null);
+
   // Security Credentials State
   const [secConfig, setSecConfig] = useState<AdminSecurityConfig>(getAdminSecurityConfig);
   const [verifyEmail, setVerifyEmail] = useState("");
@@ -228,6 +275,15 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
 
   // Customer accounts & Admin user management state
   const [customers, setCustomers] = useState<CustomerAccount[]>([]);
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [customerFilter, setCustomerFilter] = useState<"all" | "loyal" | "blocked">("all");
+  const [creatingNewCustomer, setCreatingNewCustomer] = useState<{
+    name: string;
+    username: string;
+    email: string;
+    phone: string;
+    password: string;
+  } | null>(null);
   const [showUserPassMap, setShowUserPassMap] = useState<{ [key: string]: boolean }>({});
   const [editingUser, setEditingUser] = useState<{
     id: string;
@@ -1121,7 +1177,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
               )}
 
               {/* Stat Cards */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                 <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-between">
                   <div>
                     <span className="text-xs text-slate-400 font-medium">মোট অর্ডার</span>
@@ -1161,11 +1217,21 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                     <CheckCircle2 className="w-5 h-5" />
                   </div>
                 </div>
+
+                <div className="p-4 rounded-2xl bg-slate-900 border border-emerald-500/30 flex items-center justify-between col-span-2 sm:col-span-1">
+                  <div>
+                    <span className="text-xs text-emerald-300 font-bold">মোট বিক্রি (আয়)</span>
+                    <span className="text-xl font-black text-emerald-400 font-mono mt-0.5 block">৳ {toBn(totalRevenue)}</span>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center">
+                    <TrendingUp className="w-5 h-5" />
+                  </div>
+                </div>
               </div>
 
-              {/* Filters & Search Bar */}
-              <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-slate-900 p-3.5 rounded-2xl border border-slate-800">
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+              {/* Filters, Search & Super-Admin Quick Order Tools */}
+              <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-slate-900 p-3.5 rounded-2xl border border-slate-800">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0">
                   {(["all", "pending", "processing", "completed", "cancelled"] as const).map((st) => (
                     <button
                       key={st}
@@ -1185,15 +1251,71 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                   ))}
                 </div>
 
-                <div className="relative min-w-[240px]">
-                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="অর্ডার নম্বর, ফোন বা TrxID..."
-                    className="w-full pl-9 pr-3 py-1.5 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-400"
-                  />
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative flex-1 min-w-[210px]">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="অর্ডার নম্বর, ফোন বা TrxID..."
+                      className="w-full pl-9 pr-3 py-1.5 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-400"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const prods = getCatalogProducts();
+                      setCreatingManualOrder({
+                        name: "",
+                        phone: "",
+                        konamiIdOrEmail: "",
+                        konamiPassword: "",
+                        productId: prods[0]?.id || "p1",
+                        paymentMethod: "bKash (বিকাশ)",
+                        senderNumber: "",
+                        trxId: "MANUAL-" + Math.floor(1000 + Math.random() * 9000),
+                        status: "pending",
+                        adminNotes: "অ্যাডমিন প্যানেল থেকে ম্যানুয়ালি তৈরি অর্ডার",
+                      });
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>ম্যানুয়াল অর্ডার তৈরি</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const headers = ["OrderNo", "Date", "CustomerName", "Phone", "Package", "Price", "PaymentMethod", "TrxID", "Status"];
+                      const rows = orders.map((o) => [
+                        o.orderNo,
+                        new Date(o.time).toISOString(),
+                        `"${(o.name || "").replace(/"/g, '""')}"`,
+                        o.phone,
+                        `"${(o.packageName || "").replace(/"/g, '""')}"`,
+                        o.price,
+                        `"${(o.paymentMethod || "").replace(/"/g, '""')}"`,
+                        o.trxId,
+                        o.status,
+                      ]);
+                      const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+                      const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `nextgen_orders_${new Date().toISOString().slice(0, 10)}.csv`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                    title="সকল অর্ডারের এক্সেল/CSV রিপোর্ট ডাউনলোড করুন"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>CSV রিপোর্ট</span>
+                  </button>
                 </div>
               </div>
 
@@ -1769,13 +1891,55 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
 
                           {/* Quick Secondary Actions */}
                           <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditingFullOrder({
+                                    orderNo: order.orderNo,
+                                    name: order.name,
+                                    phone: order.phone,
+                                    otpWhatsapp: order.otpWhatsapp || order.phone,
+                                    konamiIdOrEmail: order.konamiIdOrEmail,
+                                    konamiPassword: order.konamiPassword,
+                                    paymentMethod: order.paymentMethod,
+                                    senderNumber: order.senderNumber,
+                                    trxId: order.trxId,
+                                    adminNotes: order.adminNotes || "",
+                                    customerNote: order.customerNote || "",
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 font-bold cursor-pointer"
+                                title="অর্ডারের নাম, ফোন, Konami আইডি/পাসওয়ার্ড, TrxID বা নোট এডিট করুন"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                                <span>পূর্ণাঙ্গ তথ্য এডিট</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDirectNotifTarget({
+                                    phone: order.phone,
+                                    customerName: order.name,
+                                    orderNo: order.orderNo,
+                                    title: `🔔 অর্ডার #${order.orderNo} সংক্রান্ত জরুরি বার্তা`,
+                                    message: "",
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/30 text-purple-300 font-bold cursor-pointer"
+                                title="এই কাস্টমারের ওয়েবসাইট নোটিফিকেশনে সরাসরি মেসেজ পাঠান"
+                              >
+                                <BellRing className="w-3 h-3" />
+                                <span>নোটিফিকেশন পাঠান</span>
+                              </button>
+
                               <button
                                 onClick={() => handleWrongPasswordNotice(order)}
                                 className="inline-flex items-center gap-1 text-amber-400 hover:text-amber-300 cursor-pointer"
                               >
                                 <AlertTriangle className="w-3.5 h-3.5" />
-                                <span>ভুল পাসওয়ার্ড নোটিশ</span>
+                                <span>ভুল পাসওয়ার্ড</span>
                               </button>
 
                               <button
@@ -1825,8 +1989,75 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                     <span>ইউজার অ্যাকাউন্টস ও কাস্টমার কন্ট্রোল প্যানেল (Full Admin Access)</span>
                   </h3>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    যেকোনো ইউজার পাসওয়ার্ড ভুলে গেলে বা সমস্যায় পড়লে এখান থেকে তার ইউজারনেম, ইমেইল, পাসওয়ার্ড দেখা, পরিবর্তন ও সব অর্ডার রিপোর্ট ম্যানেজ করুন
+                    যেকোনো ইউজার পাসওয়ার্ড ভুলে গেলে বা সমস্যায় পড়লে এখান থেকে তার ইউজারনেম, ইমেইল, পাসওয়ার্ড দেখা, পরিবর্তন, নোটিফিকেশন পাঠানো ও সব অর্ডার ম্যানেজ করুন
                   </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCreatingNewCustomer({
+                      name: "",
+                      username: "",
+                      email: "",
+                      phone: "",
+                      password: "",
+                    })
+                  }
+                  className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-lg shadow-cyan-500/20 shrink-0"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>+ নতুন কাস্টমার অ্যাকাউন্ট খুলুন</span>
+                </button>
+              </div>
+
+              {/* Customer Search & Filter Bar */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-900 p-3.5 rounded-2xl border border-slate-800">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setCustomerFilter("all")}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition ${
+                      customerFilter === "all"
+                        ? "bg-cyan-500 text-black"
+                        : "bg-slate-800 text-slate-300 hover:text-white"
+                    }`}
+                  >
+                    সব কাস্টমার ({toBn(customers.length)})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCustomerFilter("loyal")}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition ${
+                      customerFilter === "loyal"
+                        ? "bg-amber-400 text-black"
+                        : "bg-slate-800 text-amber-300 hover:text-white"
+                    }`}
+                  >
+                    👑 লয়্যাল ইউজার ({toBn(customers.filter(c => c.totalOrders >= 2 || c.completedOrders >= 2 || c.totalSpent >= 2000).length)})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCustomerFilter("blocked")}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition ${
+                      customerFilter === "blocked"
+                        ? "bg-rose-500 text-white"
+                        : "bg-slate-800 text-rose-300 hover:text-white"
+                    }`}
+                  >
+                    🚫 ব্লকড ({toBn(customers.filter(c => c.isBlocked).length)})
+                  </button>
+                </div>
+
+                <div className="relative min-w-[240px]">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type="text"
+                    value={customerSearch}
+                    onChange={(e) => setCustomerSearch(e.target.value)}
+                    placeholder="কাস্টমারের নাম, মোবাইল বা ইমেইল খুঁজুন..."
+                    className="w-full pl-9 pr-3 py-1.5 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-400"
+                  />
                 </div>
               </div>
 
@@ -2005,7 +2236,21 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/80">
-                      {customers.map((c, idx) => {
+                      {customers
+                        .filter((c) => {
+                          const isLoyal = c.totalOrders >= 2 || c.completedOrders >= 2 || c.totalSpent >= 2000;
+                          if (customerFilter === "loyal" && !isLoyal) return false;
+                          if (customerFilter === "blocked" && !c.isBlocked) return false;
+                          const q = customerSearch.trim().toLowerCase();
+                          if (!q) return true;
+                          return (
+                            (c.name || "").toLowerCase().includes(q) ||
+                            (c.phone || "").toLowerCase().includes(q) ||
+                            (c.email || "").toLowerCase().includes(q) ||
+                            (c.username || "").toLowerCase().includes(q)
+                          );
+                        })
+                        .map((c, idx) => {
                         const rowKey = c.id || c.phone || String(idx);
                         const isPassShown = !!showUserPassMap[rowKey];
                         const isLoyal = c.totalOrders >= 2 || c.completedOrders >= 2 || c.totalSpent >= 2000;
@@ -2132,7 +2377,59 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                             </td>
 
                             <td className="p-3.5 text-right">
-                              <div className="inline-flex items-center gap-1.5">
+                              <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                                {c.phone && (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSearchQuery(c.phone);
+                                        setFilterStatus("all");
+                                        setActiveTab("orders");
+                                      }}
+                                      className="px-2 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 font-bold cursor-pointer border border-cyan-500/30"
+                                      title="এই কাস্টমারের সকল অর্ডার দেখুন"
+                                    >
+                                      অর্ডারসমূহ ({toBn(c.totalOrders)})
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setDirectNotifTarget({
+                                          phone: c.phone,
+                                          customerName: c.name,
+                                          title: `🔔 ${shopSettings.siteName} এডমিন বার্তা`,
+                                          message: "",
+                                        })
+                                      }
+                                      className="px-2 py-1 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 font-bold cursor-pointer border border-purple-500/30"
+                                      title="এই কাস্টমারের ওয়েবসাইট নোটিফিকেশনে সরাসরি মেসেজ পাঠান"
+                                    >
+                                      🔔 মেসেজ
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (c.isBlocked) {
+                                          resetCustomerStrikes(c.phone);
+                                          setUserAdminMsg(`✅ ${c.name} (${c.phone}) কে আনব্লক ও স্ট্রাইক রিসেট করা হয়েছে!`);
+                                        } else {
+                                          blockUserManual(c.phone, "অ্যাডমিন প্যানেল থেকে ব্লক করা হয়েছে");
+                                          setUserAdminMsg(`🚫 ${c.name} (${c.phone}) কে ব্লক করা হয়েছে!`);
+                                        }
+                                        loadData();
+                                        setTimeout(() => setUserAdminMsg(""), 3500);
+                                      }}
+                                      className={`px-2 py-1 rounded-lg font-bold cursor-pointer border ${
+                                        c.isBlocked
+                                          ? "bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/30"
+                                          : "bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700"
+                                      }`}
+                                    >
+                                      {c.isBlocked ? "আনব্লক" : "ব্লক"}
+                                    </button>
+                                  </>
+                                )}
                                 {c.id && (
                                   <button
                                     type="button"
@@ -2411,6 +2708,139 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                 )}
 
                 <form onSubmit={handleSaveShopSettings} className="space-y-4">
+                  {/* Website Branding & Support Control */}
+                  <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+                    <h4 className="text-xs font-extrabold text-cyan-300 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-cyan-400" />
+                      <span>ওয়েবসাইটের নাম, স্লোগান ও সাপোর্ট নম্বর নিয়ন্ত্রণ</span>
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-300 mb-1">
+                          ওয়েবসাইটের নাম (Site Name)
+                        </label>
+                        <input
+                          type="text"
+                          value={shopSettings.siteName}
+                          onChange={(e) => updateShopSettingField({ siteName: e.target.value })}
+                          className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-300 mb-1">
+                          ট্যাগলাইন / সাবটাইটেল (Tagline)
+                        </label>
+                        <input
+                          type="text"
+                          value={shopSettings.tagline}
+                          onChange={(e) => updateShopSettingField({ tagline: e.target.value })}
+                          className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-300 mb-1">
+                          অফিসিয়াল সাপোর্ট WhatsApp নম্বর (আন্তর্জাতিক ফরম্যাট)
+                        </label>
+                        <input
+                          type="text"
+                          value={shopSettings.whatsapp}
+                          onChange={(e) => updateShopSettingField({ whatsapp: e.target.value })}
+                          placeholder="8801629802989"
+                          className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-emerald-300 font-mono text-xs focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-300 mb-1">
+                          সাপোর্ট সময়সূচী (Support Hours)
+                        </label>
+                        <input
+                          type="text"
+                          value={shopSettings.supportHours}
+                          onChange={(e) => updateShopSettingField({ supportHours: e.target.value })}
+                          className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Full Database Backup, Restore & Cloud Sync */}
+                  <div className="p-4 rounded-2xl bg-cyan-950/25 border border-cyan-500/30 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <h4 className="text-xs font-extrabold text-cyan-300 flex items-center gap-1.5">
+                          <RefreshCw className="w-4 h-4 text-cyan-400" />
+                          <span>☁️ সার্ভার ও ক্লাউড ডেটা ব্যাকআপ / রিস্টোর কন্ট্রোল</span>
+                        </h4>
+                        <p className="text-[11px] text-slate-300 mt-0.5">
+                          আপনার সকল অর্ডার, প্রোডাক্ট, অফার, কাস্টমার ও এপিআই সেটিংস সার্ভার এবং Firebase ডাটাবেসে সুরক্ষিত আছে। চাইলে ১-ক্লিকে JSON ব্যাকআপ ডাউনলোড বা রিস্টোর করতে পারেন।
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await forceSyncAllToServerAndCloud();
+                          setSettingsSuccessMsg("☁️ সকল ডেটা সফলভাবে সার্ভার এবং ক্লাউড ডাটাবেসে সিঙ্ক করা হয়েছে!");
+                          setTimeout(() => setSettingsSuccessMsg(""), 4000);
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>১-ক্লিক ক্লাউড ও সার্ভার সিঙ্ক</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const jsonStr = exportFullStoreBackup();
+                          const blob = new Blob([jsonStr], { type: "application/json" });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = `nextgen_full_backup_${new Date().toISOString().slice(0, 10)}.json`;
+                          a.click();
+                          URL.revokeObjectURL(url);
+                          setSettingsSuccessMsg("📥 সম্পূর্ণ ওয়েবসাইটের ডেটা ব্যাকআপ ফাইল ডাউনলোড হয়েছে!");
+                          setTimeout(() => setSettingsSuccessMsg(""), 4000);
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-cyan-500/30 text-cyan-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>পূর্ণাঙ্গ ব্যাকআপ ডাউনলোড (JSON)</span>
+                      </button>
+
+                      <label className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer">
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>ব্যাকআপ ফাইল রিস্টোর করুন</span>
+                        <input
+                          type="file"
+                          accept=".json,application/json"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                              const content = String(reader.result || "");
+                              const res = importFullStoreBackup(content);
+                              if (res.ok) {
+                                loadData();
+                                setSettingsSuccessMsg("✅ ব্যাকআপ ফাইল থেকে সকল ডেটা সফলভাবে রিস্টোর ও সার্ভারে সেভ হয়েছে!");
+                              } else {
+                                setSettingsSuccessMsg(`⚠️ ${res.error}`);
+                              }
+                              setTimeout(() => setSettingsSuccessMsg(""), 5000);
+                            };
+                            reader.readAsText(file);
+                            e.target.value = "";
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-semibold text-slate-300 mb-1">
@@ -3641,6 +4071,587 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                   className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black font-extrabold text-xs cursor-pointer shadow-lg shadow-cyan-500/20"
                 >
                   ✅ অর্ডার আপডেট ও ওয়েবসাইট নোটিফিকেশন পাঠান
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Full Order Details Edit Modal */}
+      {editingFullOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-slate-900 border-2 border-cyan-500/40 rounded-2xl p-5 sm:p-6 w-full max-w-lg space-y-4 shadow-2xl max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="font-extrabold text-white text-sm sm:text-base flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-cyan-400" />
+                <span>অর্ডার #{editingFullOrder.orderNo} এর সকল তথ্য এডিট করুন</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEditingFullOrder(null)}
+                className="text-slate-400 hover:text-white text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                updateOrderDetails(editingFullOrder.orderNo, {
+                  name: editingFullOrder.name.trim(),
+                  phone: convertBnToEnDigits(editingFullOrder.phone.trim()),
+                  otpWhatsapp: convertBnToEnDigits(editingFullOrder.otpWhatsapp.trim()),
+                  konamiIdOrEmail: editingFullOrder.konamiIdOrEmail.trim(),
+                  konamiPassword: editingFullOrder.konamiPassword.trim(),
+                  paymentMethod: editingFullOrder.paymentMethod.trim(),
+                  senderNumber: convertBnToEnDigits(editingFullOrder.senderNumber.trim()),
+                  trxId: editingFullOrder.trxId.trim(),
+                  adminNotes: editingFullOrder.adminNotes.trim(),
+                  customerNote: editingFullOrder.customerNote.trim(),
+                });
+                sendDirectCustomerNotification({
+                  targetPhone: convertBnToEnDigits(editingFullOrder.phone.trim()),
+                  title: `✏️ অর্ডার #${editingFullOrder.orderNo} এর তথ্য আপডেট করা হয়েছে`,
+                  message: `অ্যাডমিন আপনার অর্ডার #${editingFullOrder.orderNo} এর তথ্য আপডেট করেছেন।${
+                    editingFullOrder.adminNotes ? ` নোট: ${editingFullOrder.adminNotes}` : ""
+                  }`,
+                  orderNo: editingFullOrder.orderNo,
+                  badge: "অর্ডার আপডেট",
+                });
+                setEditingFullOrder(null);
+                loadData();
+                setNotificationFeedback({
+                  type: "success",
+                  text: `✅ অর্ডার #${editingFullOrder.orderNo} এর সকল তথ্য সফলভাবে আপডেট করা হয়েছে এবং ওয়েবসাইট নোটিফিকেশনে জানানো হয়েছে!`,
+                });
+              }}
+              className="space-y-3 text-xs"
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">গ্রাহকের নাম *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingFullOrder.name}
+                    onChange={(e) => setEditingFullOrder({ ...editingFullOrder, name: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">মোবাইল নম্বর *</label>
+                  <input
+                    type="tel"
+                    required
+                    value={editingFullOrder.phone}
+                    onChange={(e) => setEditingFullOrder({ ...editingFullOrder, phone: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-cyan-300 font-bold mb-1">Konami ID / Gmail</label>
+                  <input
+                    type="text"
+                    value={editingFullOrder.konamiIdOrEmail}
+                    onChange={(e) =>
+                      setEditingFullOrder({ ...editingFullOrder, konamiIdOrEmail: e.target.value })
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-amber-300 font-bold mb-1">Konami পাসওয়ার্ড</label>
+                  <input
+                    type="text"
+                    value={editingFullOrder.konamiPassword}
+                    onChange={(e) =>
+                      setEditingFullOrder({ ...editingFullOrder, konamiPassword: e.target.value })
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-amber-300 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">পেমেন্ট মাধ্যম</label>
+                  <input
+                    type="text"
+                    value={editingFullOrder.paymentMethod}
+                    onChange={(e) =>
+                      setEditingFullOrder({ ...editingFullOrder, paymentMethod: e.target.value })
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">প্রেরক নম্বর (Sender)</label>
+                  <input
+                    type="text"
+                    value={editingFullOrder.senderNumber}
+                    onChange={(e) =>
+                      setEditingFullOrder({ ...editingFullOrder, senderNumber: e.target.value })
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-emerald-300 font-bold mb-1">TrxID / শেষ ডিজিট</label>
+                  <input
+                    type="text"
+                    value={editingFullOrder.trxId}
+                    onChange={(e) => setEditingFullOrder({ ...editingFullOrder, trxId: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-emerald-300 font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">OTP WhatsApp নম্বর</label>
+                  <input
+                    type="text"
+                    value={editingFullOrder.otpWhatsapp}
+                    onChange={(e) =>
+                      setEditingFullOrder({ ...editingFullOrder, otpWhatsapp: e.target.value })
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-bold mb-1">অ্যাডমিন নোট (রিসিপ্ট ও নোটিফিকেশনে যাবে)</label>
+                <input
+                  type="text"
+                  value={editingFullOrder.adminNotes}
+                  onChange={(e) =>
+                    setEditingFullOrder({ ...editingFullOrder, adminNotes: e.target.value })
+                  }
+                  placeholder="যেমন: পেমেন্ট যাচাই সম্পন্ন"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingFullOrder(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 font-bold cursor-pointer"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-black font-extrabold cursor-pointer"
+                >
+                  সেভ ও আপডেট করুন
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Create Manual Order Modal */}
+      {creatingManualOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-slate-900 border-2 border-emerald-500/40 rounded-2xl p-5 sm:p-6 w-full max-w-lg space-y-4 shadow-2xl max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="font-extrabold text-white text-sm sm:text-base flex items-center gap-2">
+                <Plus className="w-4 h-4 text-emerald-400" />
+                <span>অ্যাডমিন ম্যানুয়াল অর্ডার তৈরি করুন</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setCreatingManualOrder(null)}
+                className="text-slate-400 hover:text-white text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const prods = getCatalogProducts();
+                const selectedProd = prods.find((p) => p.id === creatingManualOrder.productId) || prods[0];
+                const orderNo = "EF" + Math.floor(1000000 + Math.random() * 9000000);
+                const cleanPhone = convertBnToEnDigits(creatingManualOrder.phone.trim());
+                const newOrd: Order = {
+                  orderNo,
+                  time: new Date().toISOString(),
+                  name: creatingManualOrder.name.trim() || "গ্রাহক",
+                  phone: cleanPhone,
+                  contactMethod: "whatsapp",
+                  contactHandle: cleanPhone,
+                  otpWhatsapp: cleanPhone,
+                  konamiIdOrEmail: creatingManualOrder.konamiIdOrEmail.trim() || "N/A",
+                  konamiPassword: creatingManualOrder.konamiPassword.trim() || "N/A",
+                  platform: "Android",
+                  items: selectedProd
+                    ? [
+                        {
+                          id: selectedProd.id,
+                          name: selectedProd.name,
+                          price: selectedProd.price,
+                          coins: selectedProd.coins,
+                          quantity: 1,
+                          category: (selectedProd.category as any) || "regular",
+                          image: selectedProd.image,
+                        },
+                      ]
+                    : [],
+                  packageName: selectedProd ? selectedProd.name : "Custom Package",
+                  price: selectedProd ? selectedProd.price : 0,
+                  coins: selectedProd ? selectedProd.coins : 0,
+                  paymentMethod: creatingManualOrder.paymentMethod,
+                  senderNumber: convertBnToEnDigits(creatingManualOrder.senderNumber.trim()) || cleanPhone,
+                  trxId: creatingManualOrder.trxId.trim() || "ADMIN",
+                  status: creatingManualOrder.status,
+                  adminNotes: creatingManualOrder.adminNotes.trim(),
+                };
+                saveOrder(newOrd);
+                setCreatingManualOrder(null);
+                loadData();
+                setNotificationFeedback({
+                  type: "success",
+                  text: `🎉 ম্যানুয়াল অর্ডার #${orderNo} সফলভাবে তৈরি ও ডাটাবেসে সেভ হয়েছে!`,
+                });
+              }}
+              className="space-y-3 text-xs"
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">গ্রাহকের নাম *</label>
+                  <input
+                    type="text"
+                    required
+                    value={creatingManualOrder.name}
+                    onChange={(e) =>
+                      setCreatingManualOrder({ ...creatingManualOrder, name: e.target.value })
+                    }
+                    placeholder="কাস্টমারের নাম"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">মোবাইল নম্বর *</label>
+                  <input
+                    type="tel"
+                    required
+                    value={creatingManualOrder.phone}
+                    onChange={(e) =>
+                      setCreatingManualOrder({ ...creatingManualOrder, phone: e.target.value })
+                    }
+                    placeholder="01XXXXXXXXX"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-cyan-300 font-bold mb-1">প্রোডাক্ট / প্যাকেজ নির্বাচন করুন *</label>
+                <select
+                  value={creatingManualOrder.productId}
+                  onChange={(e) =>
+                    setCreatingManualOrder({ ...creatingManualOrder, productId: e.target.value })
+                  }
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white"
+                >
+                  {getCatalogProducts().map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} — ৳{toBn(p.price)} ({toBn(p.coins)} কয়েন)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">Konami ID / Gmail</label>
+                  <input
+                    type="text"
+                    value={creatingManualOrder.konamiIdOrEmail}
+                    onChange={(e) =>
+                      setCreatingManualOrder({
+                        ...creatingManualOrder,
+                        konamiIdOrEmail: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">Konami পাসওয়ার্ড</label>
+                  <input
+                    type="text"
+                    value={creatingManualOrder.konamiPassword}
+                    onChange={(e) =>
+                      setCreatingManualOrder({
+                        ...creatingManualOrder,
+                        konamiPassword: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">পেমেন্ট মাধ্যম</label>
+                  <input
+                    type="text"
+                    value={creatingManualOrder.paymentMethod}
+                    onChange={(e) =>
+                      setCreatingManualOrder({
+                        ...creatingManualOrder,
+                        paymentMethod: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1">TrxID</label>
+                  <input
+                    type="text"
+                    value={creatingManualOrder.trxId}
+                    onChange={(e) =>
+                      setCreatingManualOrder({ ...creatingManualOrder, trxId: e.target.value })
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-emerald-300 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setCreatingManualOrder(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 font-bold cursor-pointer"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-black font-extrabold cursor-pointer"
+                >
+                  অর্ডার তৈরি করুন
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Direct Customer Website Notification Modal (No Email) */}
+      {directNotifTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
+          <div className="bg-slate-900 border-2 border-purple-500/40 rounded-2xl p-5 sm:p-6 w-full max-w-md space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="font-extrabold text-white text-sm sm:text-base flex items-center gap-2">
+                  <BellRing className="w-4 h-4 text-purple-400" />
+                  <span>কাস্টমারকে সরাসরি ওয়েবসাইট নোটিফিকেশন পাঠান</span>
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  প্রাপক: <b className="text-purple-300">{directNotifTarget.customerName}</b> ({directNotifTarget.phone})
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDirectNotifTarget(null)}
+                className="text-slate-400 hover:text-white text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!directNotifTarget.message.trim()) return;
+                sendDirectCustomerNotification({
+                  targetPhone: directNotifTarget.phone,
+                  title: directNotifTarget.title,
+                  message: directNotifTarget.message,
+                  orderNo: directNotifTarget.orderNo,
+                });
+                const targetName = directNotifTarget.customerName;
+                setDirectNotifTarget(null);
+                loadData();
+                setNotificationFeedback({
+                  type: "success",
+                  text: `🔔 "${targetName}" এর ওয়েবসাইট নোটিফিকেশন বেল আইকনে বার্তা পাঠানো হয়েছে!`,
+                });
+                setUserAdminMsg(`🔔 "${targetName}" এর কাছে ওয়েবসাইট নোটিফিকেশন পাঠানো হয়েছে!`);
+                setTimeout(() => setUserAdminMsg(""), 4000);
+              }}
+              className="space-y-3 text-xs"
+            >
+              <div>
+                <label className="block text-slate-300 font-bold mb-1">টাইটেল *</label>
+                <input
+                  type="text"
+                  required
+                  value={directNotifTarget.title}
+                  onChange={(e) =>
+                    setDirectNotifTarget({ ...directNotifTarget, title: e.target.value })
+                  }
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-bold mb-1">বার্তা / মেসেজ *</label>
+                <textarea
+                  rows={3}
+                  required
+                  value={directNotifTarget.message}
+                  onChange={(e) =>
+                    setDirectNotifTarget({ ...directNotifTarget, message: e.target.value })
+                  }
+                  placeholder="যেমন: ভাই, আপনার Konami টু-স্টেপ ওটিপি কোডটি দ্রুত আমাদের হোয়াটসঅ্যাপে পাঠান..."
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setDirectNotifTarget(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 font-bold cursor-pointer"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-cyan-500 text-black font-extrabold cursor-pointer"
+                >
+                  🔔 নোটিফিকেশন পাঠান
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Create New Customer Account Modal */}
+      {creatingNewCustomer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
+          <div className="bg-slate-900 border-2 border-cyan-500/40 rounded-2xl p-5 sm:p-6 w-full max-w-md space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="font-extrabold text-white text-sm sm:text-base flex items-center gap-2">
+                <UserPlus className="w-4 h-4 text-cyan-400" />
+                <span>নতুন কাস্টমার অ্যাকাউন্ট তৈরি করুন</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setCreatingNewCustomer(null)}
+                className="text-slate-400 hover:text-white text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const res = registerUserAccount({
+                  name: creatingNewCustomer.name,
+                  username: creatingNewCustomer.username,
+                  email: creatingNewCustomer.email,
+                  phone: creatingNewCustomer.phone,
+                  password: creatingNewCustomer.password,
+                });
+                if (!res.ok) {
+                  setUserAdminMsg(`⚠️ ${res.error}`);
+                  return;
+                }
+                setCreatingNewCustomer(null);
+                loadData();
+                setUserAdminMsg(`✅ নতুন কাস্টমার অ্যাকাউন্ট "${creatingNewCustomer.name}" সফলভাবে তৈরি হয়েছে!`);
+                setTimeout(() => setUserAdminMsg(""), 4000);
+              }}
+              className="space-y-3 text-xs"
+            >
+              <div>
+                <label className="block text-slate-300 font-bold mb-1">গ্রাহকের নাম *</label>
+                <input
+                  type="text"
+                  required
+                  value={creatingNewCustomer.name}
+                  onChange={(e) =>
+                    setCreatingNewCustomer({ ...creatingNewCustomer, name: e.target.value })
+                  }
+                  placeholder="যেমন: সাকিব আল হাসান"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-300 font-bold mb-1">ইউজারনেম *</label>
+                <input
+                  type="text"
+                  required
+                  value={creatingNewCustomer.username}
+                  onChange={(e) =>
+                    setCreatingNewCustomer({ ...creatingNewCustomer, username: e.target.value })
+                  }
+                  placeholder="যেমন: sakib_pes"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-300 font-bold mb-1">মোবাইল নম্বর *</label>
+                <input
+                  type="tel"
+                  required
+                  value={creatingNewCustomer.phone}
+                  onChange={(e) =>
+                    setCreatingNewCustomer({ ...creatingNewCustomer, phone: e.target.value })
+                  }
+                  placeholder="01XXXXXXXXX"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-300 font-bold mb-1">ইমেইল অ্যাড্রেস *</label>
+                <input
+                  type="email"
+                  required
+                  value={creatingNewCustomer.email}
+                  onChange={(e) =>
+                    setCreatingNewCustomer({ ...creatingNewCustomer, email: e.target.value })
+                  }
+                  placeholder="customer@gmail.com"
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-amber-300 font-bold mb-1">পাসওয়ার্ড *</label>
+                <input
+                  type="text"
+                  required
+                  value={creatingNewCustomer.password}
+                  onChange={(e) =>
+                    setCreatingNewCustomer({ ...creatingNewCustomer, password: e.target.value })
+                  }
+                  placeholder="কমপক্ষে ৪ অক্ষর"
+                  className="w-full px-3 py-2 bg-slate-950 border border-amber-500/40 rounded-xl text-amber-300 font-mono"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setCreatingNewCustomer(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 font-bold cursor-pointer"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-black font-extrabold cursor-pointer"
+                >
+                  অ্যাকাউন্ট তৈরি করুন
                 </button>
               </div>
             </form>

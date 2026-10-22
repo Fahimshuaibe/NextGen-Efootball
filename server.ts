@@ -50,17 +50,30 @@ async function startServer() {
 
   // Persistent Server-Side State Sync Endpoints (ensures data never resets on browser refresh)
   app.get("/api/state", (_req, res) => {
-    const state = readServerStateFromDisk();
+    const rawState = readServerStateFromDisk();
+    const cleanState: Record<string, any> = {};
+    for (const [k, v] of Object.entries(rawState)) {
+      if (v && typeof v === "object" && typeof (v as any).payloadJson === "string") {
+        try {
+          const pj = (v as any).payloadJson;
+          cleanState[k] = pj === "true" || pj === "false" ? pj : JSON.parse(pj);
+        } catch {
+          cleanState[k] = (v as any).payloadJson;
+        }
+      } else {
+        cleanState[k] = v;
+      }
+    }
     res.json({
       ok: true,
-      state,
+      state: cleanState,
       timestamp: new Date().toISOString(),
     });
   });
 
   app.post("/api/state", (req, res) => {
     try {
-      const { key, payloadJson, updatedAt, bulk } = req.body || {};
+      const { key, value, payloadJson, updatedAt, bulk } = req.body || {};
       const current = readServerStateFromDisk();
 
       if (bulk && typeof bulk === "object") {
@@ -70,18 +83,32 @@ async function startServer() {
               payloadJson: (v as any).payloadJson,
               updatedAt: (v as any).updatedAt || new Date().toISOString(),
             };
+          } else if (v !== undefined) {
+            current[k] = {
+              payloadJson: typeof v === "string" ? v : JSON.stringify(v),
+              updatedAt: new Date().toISOString(),
+            };
           }
         }
         writeServerStateToDisk(current);
         return res.json({ ok: true, count: Object.keys(bulk).length });
       }
 
-      if (!key || typeof payloadJson !== "string") {
-        return res.status(400).json({ ok: false, error: "Missing key or payloadJson" });
+      const resolvedPayload =
+        typeof payloadJson === "string"
+          ? payloadJson
+          : value !== undefined
+          ? typeof value === "string"
+            ? value
+            : JSON.stringify(value)
+          : undefined;
+
+      if (!key || typeof resolvedPayload !== "string") {
+        return res.status(400).json({ ok: false, error: "Missing key or value" });
       }
 
       current[String(key)] = {
-        payloadJson,
+        payloadJson: resolvedPayload,
         updatedAt: updatedAt || new Date().toISOString(),
       };
       writeServerStateToDisk(current);

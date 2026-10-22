@@ -219,7 +219,14 @@ export function updateShopSettings(updates: Partial<ShopSettings>): ShopSettings
 export function getBlockedUsers(): BlockedUser[] {
   try {
     const raw = localStorage.getItem(BLOCKED_USERS_KEY);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed.payloadJson === "string") {
+      const inner = JSON.parse(parsed.payloadJson);
+      if (Array.isArray(inner)) return inner;
+    }
+    return [];
   } catch {
     return [];
   }
@@ -1029,7 +1036,13 @@ export function getOrders(): Order[] {
     if (!data) {
       return INITIAL_DEMO_ORDERS;
     }
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed.payloadJson === "string") {
+      const inner = JSON.parse(parsed.payloadJson);
+      if (Array.isArray(inner)) return inner;
+    }
+    return INITIAL_DEMO_ORDERS;
   } catch (err) {
     console.error("Failed to load orders from storage", err);
     return INITIAL_DEMO_ORDERS;
@@ -1603,7 +1616,13 @@ export function getAppNotifications(): AppNotification[] {
     if (!raw) {
       return INITIAL_NOTIFICATIONS;
     }
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed.payloadJson === "string") {
+      const inner = JSON.parse(parsed.payloadJson);
+      if (Array.isArray(inner)) return inner;
+    }
+    return INITIAL_NOTIFICATIONS;
   } catch {
     return INITIAL_NOTIFICATIONS;
   }
@@ -1879,8 +1898,13 @@ export function getCatalogSections(): CatalogSection[] {
     if (!raw) {
       return DEFAULT_CATALOG_SECTIONS;
     }
-    const parsed: CatalogSection[] = JSON.parse(raw);
-    return parsed.sort((a, b) => a.order - b.order);
+    const parsed = JSON.parse(raw);
+    const list: CatalogSection[] = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed.payloadJson === "string"
+      ? JSON.parse(parsed.payloadJson)
+      : DEFAULT_CATALOG_SECTIONS;
+    return Array.isArray(list) ? list.sort((a, b) => a.order - b.order) : DEFAULT_CATALOG_SECTIONS;
   } catch {
     return DEFAULT_CATALOG_SECTIONS;
   }
@@ -1927,7 +1951,13 @@ export function getCatalogProducts(): CatalogProduct[] {
     if (!raw) {
       return DEFAULT_CATALOG_PRODUCTS;
     }
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed.payloadJson === "string") {
+      const inner = JSON.parse(parsed.payloadJson);
+      if (Array.isArray(inner)) return inner;
+    }
+    return DEFAULT_CATALOG_PRODUCTS;
   } catch {
     return DEFAULT_CATALOG_PRODUCTS;
   }
@@ -2046,9 +2076,17 @@ export async function initPersistentStorageSync(): Promise<void> {
 
   const syncedKeys = Object.keys(KEY_EVENT_MAP);
 
-  const applyIncomingValue = (key: string, val: any) => {
-    if (val === undefined || val === null) return;
+  const applyIncomingValue = (key: string, rawVal: any) => {
+    if (rawVal === undefined || rawVal === null) return;
     try {
+      let val = rawVal;
+      if (val && typeof val === "object" && typeof val.payloadJson === "string") {
+        try {
+          val = val.payloadJson === "true" || val.payloadJson === "false" ? val.payloadJson : JSON.parse(val.payloadJson);
+        } catch {
+          val = val.payloadJson;
+        }
+      }
       const serialized = typeof val === "string" ? val : JSON.stringify(val);
       const currentRaw = localStorage.getItem(key);
       if (currentRaw !== serialized) {
@@ -2130,9 +2168,94 @@ export async function initPersistentStorageSync(): Promise<void> {
   }
 }
 
+export function sendDirectCustomerNotification(params: {
+  targetPhone: string;
+  title: string;
+  message: string;
+  orderNo?: string;
+  badge?: string;
+}): AppNotification {
+  const notif: AppNotification = {
+    id: `notif_direct_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    type: "order_updated",
+    title: params.title.trim(),
+    message: params.message.trim(),
+    orderNo: params.orderNo,
+    targetPhone: params.targetPhone.trim(),
+    badge: params.badge || "এডমিন বার্তা",
+    badgeColor: "sky",
+    isRead: false,
+    createdAt: new Date().toISOString(),
+  };
+  saveAppNotification(notif);
+  return notif;
+}
+
+export function resetCustomerStrikes(phone: string): void {
+  unblockUser(phone);
+}
+
+export function exportFullStoreBackup(): string {
+  const backupData: Record<string, any> = {
+    _backupVersion: "2.0",
+    _exportedAt: new Date().toISOString(),
+    data: {},
+  };
+  for (const key of Object.keys(KEY_EVENT_MAP)) {
+    const raw = localStorage.getItem(key);
+    if (raw !== null) {
+      try {
+        backupData.data[key] = raw === "true" || raw === "false" ? raw : JSON.parse(raw);
+      } catch {
+        backupData.data[key] = raw;
+      }
+    }
+  }
+  return JSON.stringify(backupData, null, 2);
+}
+
+export function importFullStoreBackup(rawJson: string): { ok: boolean; error?: string } {
+  try {
+    const parsed = JSON.parse(rawJson);
+    const dataMap = parsed && parsed.data && typeof parsed.data === "object" ? parsed.data : parsed;
+    if (!dataMap || typeof dataMap !== "object") {
+      return { ok: false, error: "ভুল ব্যাকআপ ফাইল ফরম্যাট!" };
+    }
+    let count = 0;
+    for (const key of Object.keys(KEY_EVENT_MAP)) {
+      if (dataMap[key] !== undefined) {
+        persistKey(key, dataMap[key], KEY_EVENT_MAP[key]);
+        count++;
+      }
+    }
+    if (count === 0) {
+      return { ok: false, error: "ব্যাকআপ ফাইলে কোনো ভ্যালিড ডেটা পাওয়া যায়নি।" };
+    }
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "JSON পার্স করতে সমস্যা হয়েছে।" };
+  }
+}
+
+export async function forceSyncAllToServerAndCloud(): Promise<boolean> {
+  try {
+    for (const key of Object.keys(KEY_EVENT_MAP)) {
+      const raw = localStorage.getItem(key);
+      if (raw !== null) {
+        const val = raw === "true" || raw === "false" ? raw : JSON.parse(raw);
+        persistKey(key, val, KEY_EVENT_MAP[key]);
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Start sync immediately when module is imported in browser
 if (typeof window !== "undefined") {
   initPersistentStorageSync();
 }
+
 
 
