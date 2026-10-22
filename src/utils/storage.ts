@@ -1588,42 +1588,65 @@ export function getAllChatConversations(): {
 }
 
 // ===== 10. IN-APP HEADER NOTIFICATIONS & ADMIN ANNOUNCEMENTS =====
-const INITIAL_NOTIFICATIONS: AppNotification[] = [
-  {
-    id: "notif_welcome_01",
-    type: "announcement",
-    title: "🎉 NextGen Efootball-এ স্বাগতম!",
-    message: "eFootball 2026 এর অফিসিয়াল কয়েন টপ-আপ ও স্পেশাল প্লেয়ার প্যাক এখন ৫-১০ মিনিটে ফাস্ট ডেলিভারিতে উপলব্ধ!",
-    badge: "ঘোষণা",
-    badgeColor: "sky",
-    isRead: false,
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: "notif_offer_01",
-    type: "limited_offer",
-    title: "🔥 স্পেশাল লিমিটেড টাইম অফার!",
-    message: "যেকোনো কয়েন কম্বো বা প্লেয়ার প্যাক অর্ডারে স্পেশাল ক্যাশব্যাক ও বোনাস কয়েন সুবিধা উপভোগ করুন!",
-    badge: "অফার",
-    badgeColor: "amber",
-    isRead: false,
-    createdAt: new Date(Date.now() - 3600000).toISOString()
+export const WELCOME_NOTIFICATION: AppNotification = {
+  id: "notif_welcome_01",
+  type: "announcement",
+  title: "🎉 NextGen Efootball-এ স্বাগতম!",
+  message:
+    "eFootball 2026 এর অফিসিয়াল কয়েন টপ-আপ ও স্পেশাল প্লেয়ার প্যাক এখন ৫-১০ মিনিটে ফাস্ট ডেলিভারিতে উপলব্ধ!",
+  badge: "স্বাগতম",
+  badgeColor: "sky",
+  isRead: false,
+  createdAt: new Date().toISOString(),
+};
+
+const INITIAL_NOTIFICATIONS: AppNotification[] = [WELCOME_NOTIFICATION];
+
+const LOCAL_READ_NOTIFS_KEY = "nextgen_local_read_notifs_v1";
+
+function getLocalReadNotificationIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(LOCAL_READ_NOTIFS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed) : new Set();
+  } catch {
+    return new Set();
   }
-];
+}
+
+function addLocalReadNotificationIds(ids: string[]): void {
+  try {
+    const set = getLocalReadNotificationIds();
+    ids.forEach((id) => set.add(id));
+    localStorage.setItem(LOCAL_READ_NOTIFS_KEY, JSON.stringify(Array.from(set).slice(-200)));
+  } catch {
+    // ignore storage errors
+  }
+}
 
 export function getAppNotifications(): AppNotification[] {
   try {
+    const readSet = getLocalReadNotificationIds();
     const raw = localStorage.getItem(APP_NOTIFICATIONS_KEY);
-    if (!raw) {
-      return INITIAL_NOTIFICATIONS;
+    let list: AppNotification[] = INITIAL_NOTIFICATIONS;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        list = parsed;
+      } else if (parsed && typeof parsed.payloadJson === "string") {
+        const inner = JSON.parse(parsed.payloadJson);
+        if (Array.isArray(inner)) list = inner;
+      }
     }
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed && typeof parsed.payloadJson === "string") {
-      const inner = JSON.parse(parsed.payloadJson);
-      if (Array.isArray(inner)) return inner;
+    // Always ensure the Welcome notification exists for new users
+    if (!list.some((n) => n.id === WELCOME_NOTIFICATION.id)) {
+      list = [...list, WELCOME_NOTIFICATION];
     }
-    return INITIAL_NOTIFICATIONS;
+    return list.map((n) => ({
+      ...n,
+      isRead: Boolean(n.isRead || readSet.has(n.id)),
+    }));
   } catch {
     return INITIAL_NOTIFICATIONS;
   }
@@ -1641,6 +1664,7 @@ export function saveAppNotification(notif: AppNotification): void {
 
 export function markNotificationAsRead(id: string): void {
   try {
+    addLocalReadNotificationIds([id]);
     const list = getAppNotifications();
     const updated = list.map(n => n.id === id ? { ...n, isRead: true } : n);
     persistKey(APP_NOTIFICATIONS_KEY, updated, "nextgen_app_notifications_changed");
@@ -1649,10 +1673,13 @@ export function markNotificationAsRead(id: string): void {
   }
 }
 
-export function markAllNotificationsAsRead(): void {
+export function markAllNotificationsAsRead(targetIds?: string[]): void {
   try {
     const list = getAppNotifications();
-    const updated = list.map(n => ({ ...n, isRead: true }));
+    const idsToMark = targetIds && targetIds.length > 0 ? targetIds : list.map((n) => n.id);
+    addLocalReadNotificationIds(idsToMark);
+    const idSet = new Set(idsToMark);
+    const updated = list.map((n) => (idSet.has(n.id) ? { ...n, isRead: true } : n));
     persistKey(APP_NOTIFICATIONS_KEY, updated, "nextgen_app_notifications_changed");
   } catch (err) {
     console.error("Failed to mark all notifications as read", err);

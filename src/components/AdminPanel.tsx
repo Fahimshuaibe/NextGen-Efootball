@@ -4103,7 +4103,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                   >
                     {getCatalogProducts().map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.name} — ৳{toBn(p.price)} ({toBn(p.coins)} কয়েন)
+                        {p.name} — ৳{toBn(p.price)} ({toBn(p.coins ?? 0)} কয়েন)
                       </option>
                     ))}
                   </select>
@@ -4475,7 +4475,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                 >
                   {getCatalogProducts().map((p) => (
                     <option key={p.id} value={p.id}>
-                      {p.name} — ৳{toBn(p.price)} ({toBn(p.coins)} কয়েন)
+                      {p.name} — ৳{toBn(p.price)} ({toBn(p.coins ?? 0)} কয়েন)
                     </option>
                   ))}
                 </select>
