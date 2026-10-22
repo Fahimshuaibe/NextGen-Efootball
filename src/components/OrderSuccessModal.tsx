@@ -1,5 +1,5 @@
 import React from "react";
-import { CheckCircle2, Sparkles, FileText, ShoppingBag, X } from "lucide-react";
+import { CheckCircle2, Sparkles, FileText, ShoppingBag, X, MessageCircle } from "lucide-react";
 import { Order } from "../types";
 import { toBn } from "../utils/order";
 
@@ -62,23 +62,37 @@ export function OrderSuccessModal({ order, onViewReceipt, onClose }: Props) {
         </div>
 
         {/* Action Buttons */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-          <button
-            onClick={() => {
-              onViewReceipt();
-            }}
-            className="py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-cyan-500/20"
+        <div className="space-y-2 pt-1">
+          <a
+            href={`https://wa.me/8801575887881?text=${encodeURIComponent(
+              `আসসালামু আলাইকুম NextGen Efootball, আমি এইমাত্র একটি অর্ডার করেছি!\n\n🆔 অর্ডার নং: #${order.orderNo}\n👤 নাম: ${order.name}\n📦 প্যাকেজ: ${order.packageName}\n💰 মূল্য: ৳${order.price}\n\nদয়া করে দ্রুত ডেলিভারি সম্পন্ন করবেন।`
+            )}`}
+            target="_blank"
+            rel="noreferrer"
+            className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer shadow-md shadow-emerald-600/30"
           >
-            <FileText className="w-4 h-4" />
-            <span>ডিজিটাল রশিদ দেখুন</span>
-          </button>
-          <button
-            onClick={onClose}
-            className="py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer"
-          >
-            <ShoppingBag className="w-4 h-4" />
-            <span>হোমে ফিরে যান</span>
-          </button>
+            <MessageCircle className="w-4 h-4" />
+            <span>অ্যাডমিনকে WhatsApp-এ মেসেজ দিন (অর্ডার দ্রুত পেতে)</span>
+          </a>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              onClick={() => {
+                onViewReceipt();
+              }}
+              className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black font-extrabold text-xs flex items-center justify-center gap-2 transition cursor-pointer shadow-lg shadow-cyan-500/20"
+            >
+              <FileText className="w-4 h-4" />
+              <span>ডিজিটাল রশিদ দেখুন</span>
+            </button>
+            <button
+              onClick={onClose}
+              className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center justify-center gap-2 transition cursor-pointer"
+            >
+              <ShoppingBag className="w-4 h-4" />
+              <span>হোমে ফিরে যান</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

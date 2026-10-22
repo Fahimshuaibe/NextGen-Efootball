@@ -205,6 +205,7 @@ export interface ShopSettings {
   whatsappWebhookUrl?: string;
   telegramBotToken?: string;
   telegramChatId?: string;
+  discordWebhookUrl?: string;
 }
 
 export interface LiveChatMessage {

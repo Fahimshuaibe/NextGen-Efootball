@@ -56,6 +56,102 @@ async function startServer() {
     }
   });
 
+  // Server-side Telegram Notification Proxy (no CORS, reliable delivery)
+  app.post("/api/notify-telegram", async (req, res) => {
+    try {
+      const { botToken, chatId, message } = req.body || {};
+      if (!botToken || !chatId || !message) {
+        return res.status(400).json({
+          ok: false,
+          error: "Missing botToken, chatId, or message",
+        });
+      }
+
+      // Try sending with HTML formatting first
+      let tgRes = await fetch(
+        `https://api.telegram.org/bot${encodeURIComponent(botToken.trim())}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId.trim(),
+            text: message,
+            parse_mode: "HTML",
+          }),
+        }
+      );
+
+      let data = await tgRes.json();
+
+      // If HTML parse error occurred, retry without parse_mode
+      if (!data.ok) {
+        tgRes = await fetch(
+          `https://api.telegram.org/bot${encodeURIComponent(botToken.trim())}/sendMessage`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: chatId.trim(),
+              text: message,
+            }),
+          }
+        );
+        data = await tgRes.json();
+      }
+
+      if (data.ok) {
+        return res.json({ ok: true, message: "Telegram notification sent successfully", data });
+      } else {
+        return res.status(200).json({
+          ok: false,
+          error: data.description || "Telegram API rejected the request",
+        });
+      }
+    } catch (err: any) {
+      console.warn("Telegram proxy error:", err);
+      res.status(200).json({
+        ok: false,
+        error: err?.message || "Failed to reach Telegram servers",
+      });
+    }
+  });
+
+  // Server-side Discord Notification Proxy
+  app.post("/api/notify-discord", async (req, res) => {
+    try {
+      const { webhookUrl, message } = req.body || {};
+      if (!webhookUrl || !message) {
+        return res.status(400).json({
+          ok: false,
+          error: "Missing webhookUrl or message",
+        });
+      }
+
+      const discordRes = await fetch(webhookUrl.trim(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: message,
+        }),
+      });
+
+      if (discordRes.ok) {
+        return res.json({ ok: true, message: "Discord notification sent" });
+      } else {
+        return res.status(200).json({
+          ok: false,
+          error: `Discord webhook failed with status ${discordRes.status}`,
+        });
+      }
+    } catch (err: any) {
+      console.warn("Discord proxy error:", err);
+      res.status(200).json({
+        ok: false,
+        error: err?.message || "Failed to reach Discord servers",
+      });
+    }
+  });
+
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({

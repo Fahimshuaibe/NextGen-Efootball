@@ -55,80 +55,99 @@ export function buildAutoOrderNotificationMessage(order: Order): string {
   ].join("\n");
 }
 
+export function buildTelegramOrderNotificationMessage(order: Order): string {
+  const contactText =
+    order.contactMethod === "facebook"
+      ? `Facebook (${order.contactHandle || "N/A"})`
+      : order.contactMethod === "telegram"
+      ? `Telegram (${order.contactHandle || "N/A"})`
+      : `WhatsApp (${order.otpWhatsapp || order.phone})`;
+
+  const paymentSourceText =
+    order.paymentSource === "shop"
+      ? `🏪 দোকান থেকে পেমেন্ট (দোকানের শেষ ডিজিট: ${order.shopLastDigits || order.senderNumber})`
+      : `📱 নিজের মোবাইল থেকে (প্রেরক: ${order.senderNumber} | TrxID: ${order.trxId})`;
+
+  const serviceDetails =
+    order.serviceMethod === "payment_link"
+      ? `🔗 <b>পেমেন্ট লিংক অর্ডার</b>\nজিমেইল: <code>${order.paymentLinkGmail || order.konamiIdOrEmail}</code>\nলিংক: ${order.paymentLinkJapan || "N/A"}`
+      : `🎮 <b>Konami Login</b>\nID/Email: <code>${order.konamiIdOrEmail}</code>\nPassword: <code>${order.konamiPassword}</code>`;
+
+  return [
+    `🔔 <b>নতুন অর্ডার এসেছে! (NextGen Efootball)</b>`,
+    `━━━━━━━━━━━━━━━━━━`,
+    `🆔 <b>অর্ডার নং:</b> #${order.orderNo}`,
+    `👤 <b>নাম:</b> ${order.name}`,
+    `📞 <b>মোবাইল:</b> ${order.phone}`,
+    `💬 <b>OTP যোগাযোগ:</b> ${contactText}`,
+    `📦 <b>প্যাকেজ:</b> ${order.packageName}`,
+    `💰 <b>মোট টাকা:</b> ৳${toBn(order.price)}`,
+    `💳 <b>পেমেন্ট মেথড:</b> ${order.paymentMethod}`,
+    `🧾 <b>পেমেন্ট তথ্য:</b> ${paymentSourceText}`,
+    `━━━━━━━━━━━━━━━━━━`,
+    serviceDetails,
+    `🕒 <b>সময়:</b> ${new Date(order.time).toLocaleString("bn-BD")}`,
+  ].join("\n");
+}
+
 /**
- * Automatically sends the order notification in the background to the Admin's WhatsApp
- * (and Telegram / Email backup) WITHOUT requiring the customer to have WhatsApp installed.
+ * Automatically sends the order notification in the background to the Admin
+ * through multiple reliable channels (Telegram Bot, Admin Gmail, Discord, and WhatsApp).
  */
 export async function sendAutomaticAdminOrderAlert(order: Order): Promise<{
-  whatsappSent: boolean;
   telegramSent: boolean;
   emailSent: boolean;
+  whatsappSent: boolean;
+  discordSent: boolean;
 }> {
   const settings = getShopSettings();
   const secConfig = getAdminSecurityConfig();
   const message = buildAutoOrderNotificationMessage(order);
+  const tgHtmlMessage = buildTelegramOrderNotificationMessage(order);
 
-  let whatsappSent = false;
   let telegramSent = false;
   let emailSent = false;
+  let whatsappSent = false;
+  let discordSent = false;
 
-  // 1. Automatic WhatsApp Bot API (CallMeBot Free WhatsApp API)
-  const targetWaPhone = formatBdWhatsappForUrl(
-    settings.autoWhatsappPhone || settings.whatsapp || "01629802989"
-  );
-  const apiKey = (settings.callmebotApiKey || "").trim();
-
-  if (targetWaPhone && apiKey) {
-    try {
-      const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(
-        targetWaPhone
-      )}&text=${encodeURIComponent(message)}&apikey=${encodeURIComponent(apiKey)}`;
-      await fetch(url, { method: "GET", mode: "no-cors" });
-      whatsappSent = true;
-    } catch (err) {
-      console.warn("Auto WhatsApp CallMeBot alert error:", err);
-    }
-  }
-
-  // 2. Custom WhatsApp Webhook / Green-API / UltraMsg URL (if configured)
-  if (settings.whatsappWebhookUrl && settings.whatsappWebhookUrl.trim()) {
-    try {
-      await fetch(settings.whatsappWebhookUrl.trim(), {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          phone: targetWaPhone,
-          text: message,
-          message,
-          order,
-        }),
-      });
-      whatsappSent = true;
-    } catch (err) {
-      console.warn("Custom WhatsApp Webhook error:", err);
-    }
-  }
-
-  // 3. Automatic Telegram Bot API (if configured)
+  // 1. Automatic Telegram Bot API (Primary & Most Reliable - 100% Free, No Server-Full Limits)
   if (settings.telegramBotToken?.trim() && settings.telegramChatId?.trim()) {
     try {
-      const tgUrl = `https://api.telegram.org/bot${settings.telegramBotToken.trim()}/sendMessage`;
-      await fetch(tgUrl, {
+      // First try server-side proxy route (no CORS)
+      const res = await fetch("/api/notify-telegram", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          chat_id: settings.telegramChatId.trim(),
-          text: message,
+          botToken: settings.telegramBotToken.trim(),
+          chatId: settings.telegramChatId.trim(),
+          message: tgHtmlMessage,
         }),
       });
-      telegramSent = true;
+      const data = await res.json();
+      if (data.ok) {
+        telegramSent = true;
+      } else {
+        // Direct browser fallback
+        const directUrl = `https://api.telegram.org/bot${encodeURIComponent(
+          settings.telegramBotToken.trim()
+        )}/sendMessage`;
+        const directRes = await fetch(directUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: settings.telegramChatId.trim(),
+            text: message,
+          }),
+        });
+        const directData = await directRes.json();
+        if (directData.ok) telegramSent = true;
+      }
     } catch (err) {
       console.warn("Auto Telegram alert error:", err);
     }
   }
 
-  // 4. Server-side Resend Email Notification to Admin
+  // 2. Server-side Resend Email Notification to Admin (shuaivehasanfahim@gmail.com)
   const adminEmail = (secConfig.securityEmail || "shuaivehasanfahim@gmail.com").trim();
   if (adminEmail) {
     try {
@@ -153,12 +172,177 @@ export async function sendAutomaticAdminOrderAlert(order: Order): Promise<{
     }
   }
 
-  return { whatsappSent, telegramSent, emailSent };
+  // 3. Discord Webhook Notification (if configured)
+  if (settings.discordWebhookUrl && settings.discordWebhookUrl.trim()) {
+    try {
+      const discordMsg = `**🔔 নতুন অর্ডার এসেছে! (NextGen Efootball)**\n\`\`\`\n${message}\n\`\`\``;
+      const res = await fetch("/api/notify-discord", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          webhookUrl: settings.discordWebhookUrl.trim(),
+          message: discordMsg,
+        }),
+      });
+      if (res.ok) discordSent = true;
+    } catch (err) {
+      console.warn("Discord alert error:", err);
+    }
+  }
+
+  // 4. WhatsApp Bot (CallMeBot / Custom Webhook) as optional extra
+  const targetWaPhone = formatBdWhatsappForUrl(
+    settings.autoWhatsappPhone || settings.whatsapp || "01629802989"
+  );
+  const apiKey = (settings.callmebotApiKey || "").trim();
+
+  if (targetWaPhone && apiKey) {
+    try {
+      const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(
+        targetWaPhone
+      )}&text=${encodeURIComponent(message)}&apikey=${encodeURIComponent(apiKey)}`;
+      await fetch(url, { method: "GET", mode: "no-cors" });
+      whatsappSent = true;
+    } catch (err) {
+      console.warn("Auto WhatsApp CallMeBot alert error:", err);
+    }
+  }
+
+  if (settings.whatsappWebhookUrl && settings.whatsappWebhookUrl.trim()) {
+    try {
+      await fetch(settings.whatsappWebhookUrl.trim(), {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: targetWaPhone,
+          text: message,
+          message,
+          order,
+        }),
+      });
+      whatsappSent = true;
+    } catch (err) {
+      console.warn("Custom WhatsApp Webhook error:", err);
+    }
+  }
+
+  return { telegramSent, emailSent, whatsappSent, discordSent };
 }
 
 /**
- * Sends a test WhatsApp message to the Admin's WhatsApp so the Admin can verify
- * their CallMeBot API key or Webhook right from the Admin Panel.
+ * Sends a test Telegram notification so the Admin can verify their Bot Token and Chat ID
+ */
+export async function sendTestTelegramAlert(
+  botToken: string,
+  chatId: string
+): Promise<{ ok: boolean; message: string }> {
+  const token = botToken.trim();
+  const chat = chatId.trim();
+  if (!token || !chat) {
+    return {
+      ok: false,
+      message: "দয়া করে টেলিগ্রাম Bot Token এবং Chat ID উভয় তথ্যই প্রদান করুন।",
+    };
+  }
+
+  const testMsg = [
+    `✅ <b>NextGen Efootball টেলিগ্রাম অর্ডার বট সফলভাবে সংযুক্ত হয়েছে!</b>`,
+    `━━━━━━━━━━━━━━━━━━`,
+    `🎉 এখন থেকে ওয়েবসাইটে যেকোনো গ্রাহক অর্ডার করলেই সাথে সাথে আপনার এই টেলিগ্রামে সব তথ্য (আইডি, পাসওয়ার্ড, পেমেন্ট নাম্বার) চলে আসবে!`,
+    `⚡ <i>Telegram Bot কোনো সার্ভার জ্যাম ছাড়াই ১০০% নিখুঁতভাবে ইনস্ট্যান্ট মেসেজ ডেলিভার করে।</i>`,
+  ].join("\n");
+
+  try {
+    const res = await fetch("/api/notify-telegram", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        botToken: token,
+        chatId: chat,
+        message: testMsg,
+      }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      return { ok: true, message: "✅ সফল হয়েছে! আপনার টেলিগ্রাম বটে টেস্ট মেসেজ পৌঁছেছে।" };
+    }
+    return {
+      ok: false,
+      message: `❌ টেলিগ্রাম পাঠাতে ত্রুটি: ${data.error || "Bot Token অথবা Chat ID ভুল হতে পারে।"}`,
+    };
+  } catch (err: any) {
+    return { ok: false, message: `❌ নেটওয়ার্ক ত্রুটি: ${err?.message || "সার্ভার সংযোগে সমস্যা।"}` };
+  }
+}
+
+/**
+ * Sends a test Discord Webhook notification
+ */
+export async function sendTestDiscordAlert(
+  webhookUrl: string
+): Promise<{ ok: boolean; message: string }> {
+  const url = webhookUrl.trim();
+  if (!url || !url.startsWith("http")) {
+    return { ok: false, message: "দয়া করে সঠিক Discord Webhook URL দিন।" };
+  }
+
+  const msg = `✅ **NextGen Efootball Discord অ্যালার্ট সফলভাবে কানেক্ট হয়েছে!**\nএখন থেকে নতুন অর্ডার আসলে এই চ্যানেলে মেসেজ আসবে।`;
+  try {
+    const res = await fetch("/api/notify-discord", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ webhookUrl: url, message: msg }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      return { ok: true, message: "✅ Discord চ্যানেলে টেস্ট মেসেজ সফলভাবে গিয়েছে!" };
+    }
+    return { ok: false, message: `❌ Discord ত্রুটি: ${data.error || "Webhook কাজ করছে না।"}` };
+  } catch (err: any) {
+    return { ok: false, message: `❌ নেটওয়ার্ক ত্রুটি: ${err?.message || "ব্যর্থ হয়েছে"}` };
+  }
+}
+
+/**
+ * Sends a test Admin Email notification
+ */
+export async function sendTestAdminEmailAlert(
+  adminEmail: string
+): Promise<{ ok: boolean; message: string }> {
+  const email = adminEmail.trim().toLowerCase();
+  if (!email || !email.includes("@")) {
+    return { ok: false, message: "দয়া করে সঠিক জিমেইল অ্যাড্রেস দিন।" };
+  }
+
+  try {
+    const res = await fetch("/api/notify-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        orderNo: `TEST-${Date.now().toString(36).toUpperCase()}`,
+        recipientEmail: email,
+        customerName: "অ্যাডমিন",
+        eventType: "order_created",
+        subject: `🔔 টেস্ট অর্ডার অ্যালার্ট - NextGen Efootball`,
+        html: `<div style="font-family:sans-serif;padding:20px;background:#0f172a;color:#f8fafc;border-radius:12px;"><h2 style="color:#38bdf8;">✅ টেস্ট ইমেইল অ্যালার্ট সফল!</h2><p>আপনার অ্যাডমিন ইমেইল (${email}) এ নতুন অর্ডারের সব নোটিফিকেশন সুন্দরভাবে পৌঁছাবে।</p></div>`,
+        text: `টেস্ট ইমেইল অ্যালার্ট সফল হয়েছে! আপনার অ্যাডমিন ইমেইল: ${email}`,
+        idempotencyKey: `test_admin_${Date.now()}`,
+        forceRetry: true,
+      }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      return { ok: true, message: `✅ আপনার জিমেইলে (${email}) টেস্ট ইমেইল পাঠানো হয়েছে! ইনবক্স চেক করুন।` };
+    }
+    return { ok: false, message: `❌ ইমেইল পাঠাতে ত্রুটি: ${data.error || "সার্ভার রেসপন্স দেয়নি।"}` };
+  } catch (err: any) {
+    return { ok: false, message: `❌ নেটওয়ার্ক ত্রুটি: ${err?.message || "ব্যর্থ হয়েছে"}` };
+  }
+}
+
+/**
+ * Sends a test WhatsApp message to the Admin's WhatsApp (CallMeBot)
  */
 export async function sendTestAutoWhatsappAlert(
   phone: string,
@@ -167,27 +351,35 @@ export async function sendTestAutoWhatsappAlert(
 ): Promise<boolean> {
   const cleanPhone = formatBdWhatsappForUrl(phone || "01629802989");
   const testMsg = [
-    `✅ *NextGen Efootball অটোমেটিক WhatsApp বট চালু হয়েছে!*`,
-    `এখন থেকে ওয়েবসাইটে যেকোনো কাস্টমার অর্ডার করলেই (কাস্টমারের ফোনে WhatsApp না থাকলেও) সাথে সাথে এই নম্বরে অটোমেটিক অর্ডারের সব তথ্য চলে আসবে।`,
+    `✅ *NextGen Efootball অটোমেটিক WhatsApp বট টেস্ট মেসেজ*`,
+    `অর্ডার সংক্রান্ত স্বয়ংক্রিয় মেসেজ টেস্ট সফল হয়েছে।`,
   ].join("\n");
 
   let sent = false;
   if (cleanPhone && apiKey.trim()) {
-    const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(
-      cleanPhone
-    )}&text=${encodeURIComponent(testMsg)}&apikey=${encodeURIComponent(apiKey.trim())}`;
-    await fetch(url, { method: "GET", mode: "no-cors" });
-    sent = true;
+    try {
+      const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(
+        cleanPhone
+      )}&text=${encodeURIComponent(testMsg)}&apikey=${encodeURIComponent(apiKey.trim())}`;
+      await fetch(url, { method: "GET", mode: "no-cors" });
+      sent = true;
+    } catch {
+      sent = false;
+    }
   }
 
   if (webhookUrl && webhookUrl.trim()) {
-    await fetch(webhookUrl.trim(), {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone: cleanPhone, text: testMsg, message: testMsg }),
-    });
-    sent = true;
+    try {
+      await fetch(webhookUrl.trim(), {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: cleanPhone, text: testMsg, message: testMsg }),
+      });
+      sent = true;
+    } catch {
+      // ignore
+    }
   }
 
   return sent;
