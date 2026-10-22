@@ -104,8 +104,14 @@ export function getLoginStartWhatsappMessage(
   customerName: string,
   orderNo: string
 ): string {
-  return `আসসালামু আলাইকুম ${customerName} ভাই, NextGen Efootball থেকে বলছি। আপনার অর্ডার নম্বর #${orderNo} এর প্রসেসিং শুরু করতে যাচ্ছি।\n\n` +
-    `আপনার আইডি লগইন করা হবে। আপনি কি এক্টিভ আছেন?`;
+  const cleanName = (customerName || "কাস্টমার").trim();
+  const cleanOrderNo = (orderNo || "").trim().replace(/^#/, "");
+  return (
+    `আসসালামু আলাইকুম ${cleanName} ভাই! ❤️\n` +
+    `NextGen Efootball থেকে বলছি।\n\n` +
+    `আপনার অর্ডার (#${cleanOrderNo}) প্রসেসিং শুরু করতে যাচ্ছি। আপনার আইডিতে লগইন করা হবে।\n\n` +
+    `আপনি কি এখন অ্যাক্টিভ আছেন? 😊`
+  );
 }
 
 /**
@@ -116,9 +122,17 @@ export function getOtpRequestWhatsappMessage(
   orderNo: string,
   emailOrKonamiId: string
 ): string {
-  return `আপনার এই অর্ডারটির (#${orderNo}) জন্য NextGen Efootball থেকে লগইন করা হচ্ছে।\n\n` +
-    `আপনার জিমেইল অ্যাড্রেস: ${emailOrKonamiId} এ একটা OTP পাঠানো হয়েছে। Otp এর মেয়াদ থাকে ৫ মিনিট।\n` +
-    `Otp দিলে ২ মিনিটের মধ্যে অর্ডার কমপ্লিট করা হবে এবং আপনাকে জানিয়ে দেওয়া হবে।`;
+  const cleanOrderNo = (orderNo || "").trim().replace(/^#/, "");
+  const cleanEmail = (emailOrKonamiId || "").trim();
+  return (
+    `🔐 NextGen Efootball — OTP Verification\n\n` +
+    `আপনার অর্ডার (#${cleanOrderNo}) সম্পন্ন করার জন্য NextGen Efootball থেকে লগইন প্রক্রিয়া শুরু করা হয়েছে।\n\n` +
+    `📧 Gmail: ${cleanEmail}\n\n` +
+    `আপনার Gmail-এ একটি OTP পাঠানো হয়েছে। কোডটির মেয়াদ মাত্র ৫ মিনিট।\n\n` +
+    `✅ অনুগ্রহ করে OTP পাওয়ার পর দ্রুত আমাদের পাঠিয়ে দিন, যাতে আপনার অর্ডারের কাজ সম্পন্ন করা যায়।\n\n` +
+    `ধন্যবাদ ❤️\n` +
+    `NextGen Efootball`
+  );
 }
 
 /**
@@ -130,12 +144,18 @@ export function getCompletedOrderWhatsappMessage(
   packageName: string,
   facebookUrl = "facebook.com/nextgenefootball01"
 ): string {
-  const cleanFb = facebookUrl.replace(/^https?:\/\//, "");
-  return `আলহামদুলিল্লাহ ${customerName} ভাই! 🎉⚽\n` +
-    `আপনার eFootball অর্ডার নম্বর: ${orderNo} (${packageName}) সফলভাবে সম্পন্ন হয়েছে এবং আপনার গেমে কয়েন যুক্ত করে দেওয়া হয়েছে।\n\n` +
-    `ভবিষ্যতে কয়েন এর প্রয়োজন হলে অবশ্যই যোগাযোগ করবেন। আর আমার ফেসবুক পেজ এ একটা রিভিউ দিয়ে আসেন: https://${cleanFb}\n` +
-    `সাথে যারা Efootball খেলে তাদের ইনভাইট দিয়ে দিতে ভুলবেন না! ❤️⚽\n\n` +
-    `- NextGen Efootball`;
+  const cleanName = (customerName || "কাস্টমার").trim();
+  const cleanOrderNo = (orderNo || "").trim().replace(/^#/, "");
+  const cleanPkg = (packageName || "").trim();
+  const cleanFb = (facebookUrl || "facebook.com/nextgenefootball01").replace(/^https?:\/\//, "");
+  return (
+    `আলহামদুলিল্লাহ, ${cleanName} ভাই! 🎉⚽\n\n` +
+    `✅ আপনার অর্ডার (#${cleanOrderNo}) সফলভাবে সম্পন্ন হয়েছে। আপনার গেমে ${cleanPkg} যুক্ত করা হয়েছে।\n\n` +
+    `⭐ আমাদের পেজে একটি রিভিউ দিয়ে পাশে থাকবেন:\n` +
+    `🔗 https://${cleanFb}\n\n` +
+    `❤️ eFootball খেলা বন্ধুদের পেজে ইনভাইট করতে ভুলবেন না!\n\n` +
+    `— NextGen Efootball`
+  );
 }
 
 export function getSortOptionLabel(sortBy: ProductSortOption): string {

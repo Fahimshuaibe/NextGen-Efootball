@@ -244,6 +244,19 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
   // Blocked Users State
   const [blockedList, setBlockedList] = useState<BlockedUser[]>(getBlockedUsers);
 
+  // Ready-to-send WhatsApp Message Drafts per Order (Start / OTP / Complete)
+  const [activeWhatsappDrafts, setActiveWhatsappDrafts] = useState<
+    Record<
+      string,
+      {
+        step: "start" | "otp" | "complete";
+        stepLabel: string;
+        message: string;
+        whatsappUrl: string;
+      }
+    >
+  >({});
+
   // Automatic Order Notification Loading, Feedback & Log Viewer State
   const [notifyingOrders, setNotifyingOrders] = useState<Record<string, boolean>>({});
   const [notificationFeedback, setNotificationFeedback] = useState<{
@@ -533,15 +546,27 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
 
     const msg = getLoginStartWhatsappMessage(order.name, order.orderNo);
     const whatsappNum = formatBdWhatsappForUrl(order.otpWhatsapp || order.phone);
+    const waUrl = whatsappNum
+      ? `https://wa.me/${whatsappNum}?text=${encodeURIComponent(msg)}`
+      : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+
+    copyToClipboard(msg, `wa_msg_${order.orderNo}`);
+    setActiveWhatsappDrafts((prev) => ({
+      ...prev,
+      [order.orderNo]: {
+        step: "start",
+        stepLabel: "১. Start (লগইন শুরু মেসেজ)",
+        message: msg,
+        whatsappUrl: waUrl,
+      },
+    }));
 
     if (order.contactMethod === "facebook" || !whatsappNum) {
-      // User doesn't use WhatsApp or prefers Facebook
-      copyToClipboard(msg, `start_${order.orderNo}`);
       if (order.contactHandle && order.contactHandle.startsWith("http")) {
         window.open(order.contactHandle, "_blank");
       }
     } else {
-      window.open(`https://wa.me/${whatsappNum}?text=${encodeURIComponent(msg)}`, "_blank");
+      window.open(waUrl, "_blank");
     }
   };
 
@@ -567,14 +592,27 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
       order.konamiIdOrEmail
     );
     const whatsappNum = formatBdWhatsappForUrl(order.otpWhatsapp || order.phone);
+    const waUrl = whatsappNum
+      ? `https://wa.me/${whatsappNum}?text=${encodeURIComponent(msg)}`
+      : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+
+    copyToClipboard(msg, `wa_msg_${order.orderNo}`);
+    setActiveWhatsappDrafts((prev) => ({
+      ...prev,
+      [order.orderNo]: {
+        step: "otp",
+        stepLabel: "২. OTP Verification মেসেজ",
+        message: msg,
+        whatsappUrl: waUrl,
+      },
+    }));
 
     if (order.contactMethod === "facebook" || !whatsappNum) {
-      copyToClipboard(msg, `otp_${order.orderNo}`);
       if (order.contactHandle && order.contactHandle.startsWith("http")) {
         window.open(order.contactHandle, "_blank");
       }
     } else {
-      window.open(`https://wa.me/${whatsappNum}?text=${encodeURIComponent(msg)}`, "_blank");
+      window.open(waUrl, "_blank");
     }
   };
 
@@ -595,14 +633,27 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
       shopSettings.facebookUrl
     );
     const whatsappNum = formatBdWhatsappForUrl(order.otpWhatsapp || order.phone);
+    const waUrl = whatsappNum
+      ? `https://wa.me/${whatsappNum}?text=${encodeURIComponent(msg)}`
+      : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+
+    copyToClipboard(msg, `wa_msg_${order.orderNo}`);
+    setActiveWhatsappDrafts((prev) => ({
+      ...prev,
+      [order.orderNo]: {
+        step: "complete",
+        stepLabel: "৩. অর্ডার কমপ্লিট মেসেজ",
+        message: msg,
+        whatsappUrl: waUrl,
+      },
+    }));
 
     if (order.contactMethod === "facebook" || !whatsappNum) {
-      copyToClipboard(msg, `complete_${order.orderNo}`);
       if (order.contactHandle && order.contactHandle.startsWith("http")) {
         window.open(order.contactHandle, "_blank");
       }
     } else {
-      window.open(`https://wa.me/${whatsappNum}?text=${encodeURIComponent(msg)}`, "_blank");
+      window.open(waUrl, "_blank");
     }
   };
 
@@ -1887,6 +1938,70 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                               <CheckCircle2 className="w-4 h-4" />
                               <span>৪. অর্ডার কমপ্লিট ও ডিজিটাল রশিদ পাঠান</span>
                             </button>
+
+                            {/* Generated WhatsApp Message Preview & Easy Send Box */}
+                            {activeWhatsappDrafts[order.orderNo] && (
+                              <div className="mt-2.5 p-3 rounded-xl bg-emerald-950/30 border border-emerald-500/40 space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[11px] font-extrabold text-emerald-300 flex items-center gap-1.5">
+                                    <MessageCircle className="w-3.5 h-3.5 text-emerald-400" />
+                                    <span>{activeWhatsappDrafts[order.orderNo].stepLabel} (রেডি ও কপি হয়েছে)</span>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setActiveWhatsappDrafts((prev) => {
+                                        const next = { ...prev };
+                                        delete next[order.orderNo];
+                                        return next;
+                                      })
+                                    }
+                                    className="text-[11px] text-slate-400 hover:text-white cursor-pointer"
+                                  >
+                                    ✕ বন্ধ
+                                  </button>
+                                </div>
+
+                                <pre className="p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 text-[11px] text-slate-100 whitespace-pre-wrap font-sans leading-relaxed select-all">
+                                  {activeWhatsappDrafts[order.orderNo].message}
+                                </pre>
+
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      copyToClipboard(
+                                        activeWhatsappDrafts[order.orderNo].message,
+                                        `wa_msg_${order.orderNo}`
+                                      )
+                                    }
+                                    className="flex-1 py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer border border-slate-700"
+                                  >
+                                    {copiedKey === `wa_msg_${order.orderNo}` ? (
+                                      <>
+                                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                        <span className="text-emerald-300">কপি হয়েছে!</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Copy className="w-3.5 h-3.5" />
+                                        <span>মেসেজ কপি করুন</span>
+                                      </>
+                                    )}
+                                  </button>
+
+                                  <a
+                                    href={activeWhatsappDrafts[order.orderNo].whatsappUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex-1 py-2 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-emerald-500/20"
+                                  >
+                                    <MessageCircle className="w-3.5 h-3.5" />
+                                    <span>WhatsApp-এ পাঠান</span>
+                                  </a>
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           {/* Quick Secondary Actions */}

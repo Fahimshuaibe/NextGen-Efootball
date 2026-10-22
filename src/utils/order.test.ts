@@ -11,6 +11,9 @@ import {
   validateEmailChangeWithPassword,
   validateOrderStepOne,
   validateAndFormatPaymentProof,
+  getLoginStartWhatsappMessage,
+  getOtpRequestWhatsappMessage,
+  getCompletedOrderWhatsappMessage,
   SearchableCatalogItem,
 } from "./order";
 import { PAYMENTS, BANK_ACCOUNTS } from "../config";
@@ -411,4 +414,41 @@ test("Multi-step checkout validates Step 1 and supports bKash, Nagad, Rocket, Up
   assert.ok(bankProof.finalTrxId?.includes("NPSB"));
 });
 
+test("WhatsApp message generators match exact requested templates for Start, OTP, and Order Complete", () => {
+  const startMsg = getLoginStartWhatsappMessage("তানভীর", "EF2610221000");
+  assert.equal(
+    startMsg,
+    `আসসালামু আলাইকুম তানভীর ভাই! ❤️\n` +
+      `NextGen Efootball থেকে বলছি।\n\n` +
+      `আপনার অর্ডার (#EF2610221000) প্রসেসিং শুরু করতে যাচ্ছি। আপনার আইডিতে লগইন করা হবে।\n\n` +
+      `আপনি কি এখন অ্যাক্টিভ আছেন? 😊`
+  );
 
+  const otpMsg = getOtpRequestWhatsappMessage("তানভীর", "EF2610221000", "tanvir@gmail.com");
+  assert.equal(
+    otpMsg,
+    `🔐 NextGen Efootball — OTP Verification\n\n` +
+      `আপনার অর্ডার (#EF2610221000) সম্পন্ন করার জন্য NextGen Efootball থেকে লগইন প্রক্রিয়া শুরু করা হয়েছে।\n\n` +
+      `📧 Gmail: tanvir@gmail.com\n\n` +
+      `আপনার Gmail-এ একটি OTP পাঠানো হয়েছে। কোডটির মেয়াদ মাত্র ৫ মিনিট।\n\n` +
+      `✅ অনুগ্রহ করে OTP পাওয়ার পর দ্রুত আমাদের পাঠিয়ে দিন, যাতে আপনার অর্ডারের কাজ সম্পন্ন করা যায়।\n\n` +
+      `ধন্যবাদ ❤️\n` +
+      `NextGen Efootball`
+  );
+
+  const completeMsg = getCompletedOrderWhatsappMessage(
+    "তানভীর",
+    "EF2610221000",
+    "1040 eFootball™ Coins",
+    "https://facebook.com/nextgenefootball01"
+  );
+  assert.equal(
+    completeMsg,
+    `আলহামদুলিল্লাহ, তানভীর ভাই! 🎉⚽\n\n` +
+      `✅ আপনার অর্ডার (#EF2610221000) সফলভাবে সম্পন্ন হয়েছে। আপনার গেমে 1040 eFootball™ Coins যুক্ত করা হয়েছে।\n\n` +
+      `⭐ আমাদের পেজে একটি রিভিউ দিয়ে পাশে থাকবেন:\n` +
+      `🔗 https://facebook.com/nextgenefootball01\n\n` +
+      `❤️ eFootball খেলা বন্ধুদের পেজে ইনভাইট করতে ভুলবেন না!\n\n` +
+      `— NextGen Efootball`
+  );
+});
