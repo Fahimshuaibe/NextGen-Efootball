@@ -2456,9 +2456,27 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                             onChange={(e) =>
                               setShopSettingsState({ ...shopSettings, telegramBotToken: e.target.value.trim() })
                             }
-                            placeholder="7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxx"
+                            placeholder="যেমন: 7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxx"
                             className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sky-200 font-mono text-xs focus:outline-none focus:border-sky-400"
                           />
+                          {shopSettings.telegramBotToken?.trim() && (
+                            <div className="mt-1 text-[10px]">
+                              {shopSettings.telegramBotToken.includes(":") &&
+                              (shopSettings.telegramBotToken.split(":")[1]?.length || 0) < 32 ? (
+                                <span className="text-amber-400 font-medium">
+                                  ⚠️ টোকেনটি অসম্পূর্ণ মনে হচ্ছে ({shopSettings.telegramBotToken.length} অক্ষর, সাধারণত ৪৬ অক্ষর থাকে)। @BotFather থেকে সম্পূর্ণ টোকেন কপি করুন।
+                                </span>
+                              ) : shopSettings.telegramBotToken.includes(":") ? (
+                                <span className="text-emerald-400 font-medium">
+                                  ✓ টোকেন ফরম্যাট ও দৈর্ঘ্য সঠিক ({shopSettings.telegramBotToken.length} অক্ষর)
+                                </span>
+                              ) : (
+                                <span className="text-rose-400 font-medium">
+                                  ⚠️ টোকেনে কোলন (:) থাকা আবশ্যক (যেমন: 123456789:AAH...)
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
 
                         <div>

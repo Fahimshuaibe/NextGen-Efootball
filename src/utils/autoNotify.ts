@@ -172,6 +172,20 @@ export async function sendAutomaticAdminOrderAlert(order: Order): Promise<{
           const retryData = await retryRes.json().catch(() => ({}));
           if (retryData.ok) telegramSent = true;
         }
+
+        // Fallback 3: Proxy via allorigins to bypass Bangladesh ISP block if direct fetch failed
+        if (!telegramSent) {
+          try {
+            const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(
+              `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${encodeURIComponent(chatId)}&text=${encodeURIComponent(message)}`
+            )}`;
+            const pRes = await fetch(proxyUrl);
+            const pData = await pRes.json().catch(() => ({}));
+            if (pData.ok) telegramSent = true;
+          } catch {
+            // ignore
+          }
+        }
       }
     } catch (err) {
       console.warn("Auto Telegram alert error:", err);
@@ -326,6 +340,21 @@ export async function autoDiscoverTelegramChatId(
     return { ok: false, error: "আগে Bot Token ঘরে আপনার টোকেনটি পেস্ট করুন।" };
   }
 
+  // Pre-validate token structure
+  const tokenParts = token.split(":");
+  if (tokenParts.length !== 2 || !tokenParts[0].match(/^\d+$/)) {
+    return {
+      ok: false,
+      error: "⚠️ Bot Token ফরম্যাট সঠিক নয়। এটি সাধারণত সংখ্যা ও অক্ষরের সমন্বয়ে হয় (যেমন: 1234567890:AAHxxxxxx)।",
+    };
+  }
+  if (tokenParts[1].length < 32) {
+    return {
+      ok: false,
+      error: `⚠️ আপনার Bot Token-টি অসম্পূর্ণ মনে হচ্ছে (কোলনের পর মাত্র ${tokenParts[1].length} অক্ষর, সাধারণত ৩৫ অক্ষর হয়)। @BotFather থেকে পুরো টোকেনটি কপি করুন (শেষে কোনো অক্ষর বাদ পড়েছে)।`,
+    };
+  }
+
   // Attempt 1: Try proxy /api/telegram-get-chat-id
   try {
     const res = await fetch("/api/telegram-get-chat-id", {
@@ -342,22 +371,47 @@ export async function autoDiscoverTelegramChatId(
   }
 
   // Attempt 2: Direct browser call to https://api.telegram.org/bot<TOKEN>/getUpdates
+  let directData: any = null;
   try {
     const directRes = await fetch(
       `https://api.telegram.org/bot${encodeURIComponent(token)}/getUpdates?limit=15`
     );
-    const data = await directRes.json().catch(() => ({}));
+    directData = await directRes.json().catch(() => ({}));
+  } catch (directErr) {
+    console.warn("Direct Telegram getUpdates failed (possibly ISP block in BD):", directErr);
+  }
 
-    if (!data.ok) {
+  // Attempt 3: Proxy via allorigins to bypass Bangladesh ISP block if direct call failed
+  if (!directData) {
+    try {
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(
+        `https://api.telegram.org/bot${token}/getUpdates?limit=15`
+      )}`;
+      const pRes = await fetch(proxyUrl);
+      directData = await pRes.json().catch(() => ({}));
+    } catch (proxyErr) {
+      console.warn("Allorigins proxy getUpdates failed:", proxyErr);
+    }
+  }
+
+  if (directData) {
+    if (!directData.ok) {
+      if (directData.error_code === 401) {
+        return {
+          ok: false,
+          error:
+            "❌ টেলিগ্রাম Bot Token সঠিক নয় (401 Unauthorized)। @BotFather থেকে দেওয়া আসল ও সম্পূর্ণ টোকেনটি কপি করে পেস্ট করুন।",
+        };
+      }
       return {
         ok: false,
         error:
-          data.description ||
+          directData.description ||
           "টেলিগ্রাম Bot Token সঠিক নয়। দয়া করে @BotFather থেকে পাওয়া সঠিক টোকেন দিন।",
       };
     }
 
-    const updates = data.result || [];
+    const updates = directData.result || [];
     if (!Array.isArray(updates) || updates.length === 0) {
       return {
         ok: false,
@@ -391,9 +445,13 @@ export async function autoDiscoverTelegramChatId(
       chatId: String(lastChat.id),
       username: displayName,
     };
-  } catch (err: any) {
-    return { ok: false, error: err?.message || "টেলিগ্রামের সাথে সংযোগে সমস্যা হয়েছে।" };
   }
+
+  return {
+    ok: false,
+    error:
+      "টেলিগ্রাম সার্ভারের সাথে সংযোগ করা যায়নি (Failed to fetch)। আপনার নেটওয়ার্কে Telegram ব্লক থাকলে ফোনের VPN চালু করতে পারেন অথবা Green-API WhatsApp ব্যবহার করতে পারেন।",
+  };
 }
 
 /**
@@ -595,6 +653,21 @@ export async function sendTestTelegramAlert(
     };
   }
 
+  // Pre-validate token structure
+  const tokenParts = token.split(":");
+  if (tokenParts.length !== 2 || !tokenParts[0].match(/^\d+$/)) {
+    return {
+      ok: false,
+      message: "⚠️ Bot Token ফরম্যাট সঠিক নয়। এটি সাধারণত সংখ্যা ও অক্ষরের সমন্বয়ে হয় (যেমন: 1234567890:AAHxxxxxx)।",
+    };
+  }
+  if (tokenParts[1].length < 32) {
+    return {
+      ok: false,
+      message: `⚠️ আপনার Bot Token-টি অসম্পূর্ণ মনে হচ্ছে (কোলনের পর মাত্র ${tokenParts[1].length} অক্ষর, সাধারণত ৩৫ অক্ষর থাকে)। @BotFather থেকে সম্পূর্ণ টোকেনটি হুবহু কপি করুন (শেষে কোনো অক্ষর বাদ পড়েছে)।`,
+    };
+  }
+
   const testMsg = [
     `✅ <b>NextGen Efootball টেলিগ্রাম অর্ডার বট সফলভাবে সংযুক্ত হয়েছে!</b>`,
     `━━━━━━━━━━━━━━━━━━`,
@@ -635,6 +708,7 @@ export async function sendTestTelegramAlert(
   }
 
   // Attempt 2: Direct browser call to Telegram Bot API
+  let directData: any = null;
   try {
     let directRes = await fetch(
       `https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`,
@@ -648,7 +722,7 @@ export async function sendTestTelegramAlert(
         }),
       }
     );
-    let directData = await directRes.json().catch(() => ({}));
+    directData = await directRes.json().catch(() => ({}));
     if (!directData.ok) {
       // Retry without HTML parse mode if tags fail
       directRes = await fetch(
@@ -664,20 +738,43 @@ export async function sendTestTelegramAlert(
       );
       directData = await directRes.json().catch(() => ({}));
     }
+  } catch (directErr) {
+    console.warn("Direct Telegram call failed (possibly ISP block):", directErr);
+  }
 
+  // Attempt 3: Proxy via allorigins to bypass Bangladesh ISP blocking
+  if (!directData) {
+    try {
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(
+        `https://api.telegram.org/bot${token}/sendMessage?chat_id=${encodeURIComponent(chat)}&text=${encodeURIComponent(plainMsg)}`
+      )}`;
+      const pRes = await fetch(proxyUrl);
+      directData = await pRes.json().catch(() => ({}));
+    } catch (proxyErr) {
+      console.warn("Allorigins proxy send failed:", proxyErr);
+    }
+  }
+
+  if (directData) {
     if (directData.ok) {
       return { ok: true, message: "✅ সফল হয়েছে! আপনার টেলিগ্রাম বটে টেস্ট মেসেজ পৌঁছেছে।" };
+    }
+    if (directData.error_code === 401) {
+      return {
+        ok: false,
+        message: "❌ টেলিগ্রাম Bot Token সঠিক নয় (401 Unauthorized)। @BotFather থেকে প্রাপ্ত আসল ও সম্পূর্ণ টোকেনটি কপি করে পেস্ট করুন।",
+      };
     }
     return {
       ok: false,
       message: `❌ টেলিগ্রাম ত্রুটি: ${directData.description || "Bot Token অথবা Chat ID ভুল হতে পারে।"}`,
     };
-  } catch (err: any) {
-    return {
-      ok: false,
-      message: `❌ নেটওয়ার্ক ত্রুটি: ${err?.message || "টেলিগ্রাম সার্ভারে সংযোগে সমস্যা।"}`,
-    };
   }
+
+  return {
+    ok: false,
+    message: "❌ সংযোগ সমস্যা (Failed to fetch): বাংলাদেশে কিছু ইন্টারনেট প্রোভাইডার Telegram সরাসরি ব্লক করে রাখে। ফোনের VPN চালু করে দেখতে পারেন অথবা Green-API WhatsApp ব্যবহার করতে পারেন।",
+  };
 }
 
 /**
