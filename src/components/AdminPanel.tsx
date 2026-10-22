@@ -87,8 +87,7 @@ import {
   MessageSquare,
   Gift,
   HelpCircle,
-  Play,
-  Mail
+  Play
 } from "lucide-react";
 import { LiveChatModal } from "./LiveChatModal";
 import {
@@ -2559,7 +2558,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <h4 className="text-xs sm:text-sm font-extrabold text-cyan-300 flex items-center gap-1.5">
-                            <Mail className="w-4 h-4 text-cyan-400" />
+                            <FileText className="w-4 h-4 text-cyan-400" />
                             <span>অ্যাডমিন জিমেইল নোটিফিকেশন (Email Alerts)</span>
                           </h4>
                           <p className="text-[11px] text-slate-300 mt-0.5">
@@ -2609,7 +2608,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <h4 className="text-xs sm:text-sm font-extrabold text-indigo-300 flex items-center gap-1.5">
-                            <Radio className="w-4 h-4 text-indigo-400" />
+                            <MessageSquare className="w-4 h-4 text-indigo-400" />
                             <span>Discord Webhook অ্যালার্ট (ঐচ্ছিক)</span>
                           </h4>
                           <p className="text-[11px] text-slate-300 mt-0.5">
