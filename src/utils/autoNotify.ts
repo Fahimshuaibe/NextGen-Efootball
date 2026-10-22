@@ -192,30 +192,9 @@ export async function sendAutomaticAdminOrderAlert(order: Order): Promise<{
     }
   }
 
-  // 2. Server-side Resend Email Notification to Admin
-  const adminEmail = (secConfig.securityEmail || "shuaivehasanfahim@gmail.com").trim();
-  if (adminEmail) {
-    try {
-      const res = await fetch("/api/notify-order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          orderNo: order.orderNo,
-          recipientEmail: adminEmail,
-          customerName: order.name,
-          eventType: "order_created",
-          orderStatus: order.status,
-          subject: `🔔 নতুন অর্ডার #${order.orderNo} - ${order.packageName} (৳${order.price})`,
-          html: `<div style="font-family:sans-serif;padding:16px;background:#0f172a;color:#f8fafc;border-radius:12px;"><h2 style="color:#38bdf8;">নতুন অর্ডার #${order.orderNo}</h2><pre style="white-space:pre-wrap;font-family:monospace;color:#e2e8f0;">${message}</pre></div>`,
-          text: message,
-          idempotencyKey: `admin_alert_${order.orderNo}`,
-        }),
-      });
-      if (res.ok) emailSent = true;
-    } catch (err) {
-      console.warn("Admin Resend email alert error:", err);
-    }
-  }
+  // 2. Admin Gmail Notification: Disabled as Telegram and WhatsApp are connected for instant sound alerts.
+  // Customer/User Gmail order receipts remain 100% active via dispatchOrderStatusNotification.
+  emailSent = false;
 
   // 3. Discord Webhook Notification (if configured)
   if (settings.discordWebhookUrl && settings.discordWebhookUrl.trim()) {

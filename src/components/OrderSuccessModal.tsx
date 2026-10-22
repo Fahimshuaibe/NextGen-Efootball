@@ -61,6 +61,36 @@ export function OrderSuccessModal({ order, onViewReceipt, onClose }: Props) {
           </div>
         </div>
 
+        {/* Auto-created Account Credentials Notice */}
+        {order.autoAccountCreated && (
+          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-cyan-950/70 via-slate-900 to-emerald-950/70 border border-cyan-500/40 text-left space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-black text-cyan-300 flex items-center gap-1.5">
+                <span>🎉 আপনার জন্য নতুন অ্যাকাউন্ট তৈরি হয়েছে!</span>
+              </span>
+              <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-[10px] font-bold">
+                অটোমেটিক
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-300 leading-relaxed">
+              আপনি পূর্বে অ্যাকাউন্ট না খোলায় আপনার দেওয়া মোবাইল নম্বর দিয়ে স্বয়ংক্রিয়ভাবে একটি অ্যাকাউন্ট তৈরি করা হয়েছে:
+            </p>
+            <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+              <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
+                <span className="text-[10px] text-slate-400 block font-sans">ইউজারনেম</span>
+                <span className="font-bold text-white text-[11px]">{order.phone}</span>
+              </div>
+              <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
+                <span className="text-[10px] text-slate-400 block font-sans">ডিফল্ট পাসওয়ার্ড</span>
+                <span className="font-bold text-amber-300 text-[11px]">{order.autoAccountDefaultPass || order.phone}</span>
+              </div>
+            </div>
+            <p className="text-[10px] text-slate-400 leading-normal">
+              💡 আপনি নিচে <b>"প্রোফাইল"</b> আইকনে গিয়ে যেকোনো সময় আপনার পাসওয়ার্ড ও প্রোফাইল তথ্য পরিবর্তন করে নিতে পারবেন।
+            </p>
+          </div>
+        )}
+
         {/* Action Buttons */}
         <div className="space-y-2 pt-1">
           <a

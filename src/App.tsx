@@ -31,6 +31,8 @@ import {
   getActiveCustomerPhone, 
   getCustomerAccount,
   getActiveUserAccount,
+  getOrCreateUserForGuestOrder,
+  isUserUsingDefaultPassword,
   getLiveChatMessages 
 } from "./utils/storage";
 import { generateUniqueOrderId } from "./utils/orderNotification";
@@ -620,6 +622,32 @@ export default function App() {
       ? cleanWa 
       : form.contactHandle.trim();
 
+    // Auto-create account for guest user if not already logged in:
+    // Username = mobile number, Password = mobile number
+    let assignedUserId = activeUser?.id;
+    let autoAccountCreated = false;
+    let autoAccountDefaultPass = "";
+
+    const orderCustomerEmail =
+      activeUser?.email ||
+      (form.konamiIdOrEmail.includes("@")
+        ? form.konamiIdOrEmail.trim()
+        : form.paymentLinkGmail?.includes("@")
+        ? form.paymentLinkGmail.trim()
+        : undefined);
+
+    if (!assignedUserId) {
+      const { user: linkedUser, isNewAccount } = getOrCreateUserForGuestOrder({
+        phone: cleanPhone,
+        name: form.name.trim(),
+        email: orderCustomerEmail,
+      });
+      assignedUserId = linkedUser.id;
+      autoAccountCreated = isNewAccount;
+      autoAccountDefaultPass = cleanPhone;
+      setActiveUser(linkedUser);
+    }
+
     const newOrder: Order = {
       orderNo,
       time: nowIso,
@@ -632,14 +660,8 @@ export default function App() {
           note: "অর্ডার তৈরি করা হয়েছে (Order Created)",
         },
       ],
-      userId: activeUser?.id,
-      customerEmail:
-        activeUser?.email ||
-        (form.konamiIdOrEmail.includes("@")
-          ? form.konamiIdOrEmail.trim()
-          : form.paymentLinkGmail?.includes("@")
-          ? form.paymentLinkGmail.trim()
-          : undefined),
+      userId: assignedUserId,
+      customerEmail: orderCustomerEmail,
       name: form.name.trim(),
       phone: cleanPhone,
       serviceMethod: "konami_login",
@@ -666,7 +688,9 @@ export default function App() {
       senderNumber: proofCheck.finalSenderNumber!,
       trxId: proofCheck.finalTrxId!,
       status: "pending",
-      customerNote: form.customerNote.trim() || undefined
+      customerNote: form.customerNote.trim() || undefined,
+      autoAccountCreated,
+      autoAccountDefaultPass: autoAccountCreated ? autoAccountDefaultPass : undefined,
     };
 
     saveOrder(newOrder);
@@ -773,8 +797,30 @@ export default function App() {
             </div>
           </div>
 
-          {/* Right Header Controls — Only Cart as requested */}
+          {/* Right Header Controls — Profile & Cart */}
           <div className="flex items-center gap-2 shrink-0">
+            {/* Customer Profile Icon */}
+            <button
+              type="button"
+              onClick={() => {
+                setAccountModalSection("dashboard");
+                setShowAccountModal(true);
+              }}
+              title="আমার অ্যাকাউন্ট ও প্রোফাইল"
+              className="relative inline-flex items-center gap-1.5 px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 hover:border-cyan-400 text-slate-200 text-xs sm:text-sm font-bold transition cursor-pointer"
+            >
+              <User className="w-4 h-4 text-cyan-400 shrink-0" />
+              <span className="hidden sm:inline">
+                {activeUser ? (activeUser.name || activeUser.username) : "প্রোফাইল"}
+              </span>
+              {isUserUsingDefaultPassword(activeUser) && (
+                <span className="absolute -top-1 -right-1 flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500 border-2 border-slate-950"></span>
+                </span>
+              )}
+            </button>
+
             {/* Cart Trigger */}
             <a
               href="#order-section"
@@ -2445,9 +2491,14 @@ export default function App() {
               setAccountModalSection("dashboard");
               setShowAccountModal(true);
             }}
-            className="flex flex-col items-center justify-center gap-0.5 py-1 text-slate-300 hover:text-cyan-400 transition cursor-pointer"
+            className="flex flex-col items-center justify-center gap-0.5 py-1 text-slate-300 hover:text-cyan-400 transition cursor-pointer relative"
           >
-            <User className="w-5 h-5" />
+            <div className="relative">
+              <User className="w-5 h-5" />
+              {isUserUsingDefaultPassword(activeUser) && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-400 border border-[#080e1e] animate-pulse" />
+              )}
+            </div>
             <span className="text-[10px] sm:text-[11px] font-bold">প্রোফাইল</span>
           </button>
         </div>

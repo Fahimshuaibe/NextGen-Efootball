@@ -14,6 +14,7 @@ import {
   updateRegisteredUser,
   changeUserEmailWithPassword,
   getOrdersForUserAccount,
+  isUserUsingDefaultPassword,
 } from "../utils/storage";
 import {
   formatBdPhonePretty,
@@ -706,6 +707,46 @@ export function CustomerAccountModal({
                   <ArrowRight className="w-4 h-4 text-cyan-400" />
                 </button>
               </div>
+
+              {/* Default Password Notice if auto-created */}
+              {isUserUsingDefaultPassword(currentUser) && (
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-slate-900 to-amber-500/10 border-2 border-amber-500/40 text-left space-y-2.5 shadow-lg">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-amber-300 flex items-center gap-1.5">
+                      <KeyRound className="w-4 h-4 text-amber-400" />
+                      <span>অটোমেটিক অ্যাকাউন্ট তৈরি সংক্রান্ত তথ্য ও সতর্কতা</span>
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+                      পাসওয়ার্ড পরিবর্তন করুন
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    অর্ডার দেওয়ার সময় কোনো অ্যাকাউন্ট না থাকায় আপনার দেওয়া মোবাইল নম্বর দিয়ে এই অ্যাকাউন্টটি স্বয়ংক্রিয়ভাবে তৈরি হয়েছে:
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                    <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block font-sans">ইউজারনেম</span>
+                      <span className="font-bold text-white text-[11px]">{currentUser.phone || currentUser.username}</span>
+                    </div>
+                    <div className="p-2 rounded-xl bg-slate-950 border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block font-sans">ডিফল্ট পাসওয়ার্ড</span>
+                      <span className="font-bold text-amber-300 text-[11px]">{currentUser.phone || currentUser.password}</span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                    <span className="text-[10px] text-slate-400">
+                      💡 সুরক্ষার জন্য নিচে ক্লিক করে আপনার নিজস্ব পাসওয়ার্ড সেট করে নিন:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveSection("details")}
+                      className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs cursor-pointer transition shadow"
+                    >
+                      🔑 নতুন পাসওয়ার্ড সেট করুন →
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Navigation Menu Cards (Matching Screenshot 2 — Simple & Essential Only) */}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">

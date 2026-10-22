@@ -102,6 +102,8 @@ export interface Order {
   userActiveConfirmed?: boolean;
   otpRequested?: boolean;
   otpRequestedAt?: string;
+  autoAccountCreated?: boolean;
+  autoAccountDefaultPass?: string;
 }
 
 export interface RegisteredUserAccount {
@@ -114,6 +116,7 @@ export interface RegisteredUserAccount {
   googleConnected?: boolean;
   emailVerified?: boolean;
   verificationCode?: string;
+  autoCreatedFromOrder?: boolean;
   createdAt: string;
 }
 

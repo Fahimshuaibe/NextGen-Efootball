@@ -431,6 +431,84 @@ export function registerUserAccount(params: {
   return { ok: true, user: newUser };
 }
 
+/**
+ * Automatically ensures an account exists for guest orders:
+ * If an account already exists with this phone, links it.
+ * Otherwise creates a new account with:
+ * - username: user's mobile number
+ * - password: user's mobile number
+ * And automatically logs the user in.
+ */
+export function getOrCreateUserForGuestOrder(params: {
+  phone: string;
+  name: string;
+  email?: string;
+}): { user: RegisteredUserAccount; isNewAccount: boolean } {
+  const users = getRegisteredUsers();
+  const rawPhone = convertBnToEnDigits(params.phone.trim());
+  const phoneKey = normalizePhoneKey(rawPhone);
+  const cleanEmail = (params.email || "").trim().toLowerCase();
+
+  // 1. Look for existing registered user matching phone, username, or email
+  const existing = users.find(
+    (u) =>
+      (u.phone && normalizePhoneKey(u.phone) === phoneKey) ||
+      (u.username && u.username.toLowerCase() === rawPhone.toLowerCase()) ||
+      (cleanEmail && u.email && u.email.toLowerCase() === cleanEmail)
+  );
+
+  if (existing) {
+    let shouldSave = false;
+    let updated = { ...existing };
+    if (!updated.email && cleanEmail && cleanEmail.includes("@")) {
+      updated.email = cleanEmail;
+      shouldSave = true;
+    }
+    if ((!updated.name || updated.name === "গ্রাহক") && params.name?.trim()) {
+      updated.name = params.name.trim();
+      shouldSave = true;
+    }
+    if (shouldSave) {
+      const idx = users.findIndex((u) => u.id === existing.id);
+      if (idx !== -1) {
+        users[idx] = updated;
+        saveRegisteredUsers(users);
+      }
+    }
+    setActiveUserAccount(updated.id);
+    if (updated.phone) setActiveCustomerPhone(updated.phone);
+    return { user: updated, isNewAccount: false };
+  }
+
+  // 2. No account exists: Auto-create account with username = phone and password = phone
+  const newUser: RegisteredUserAccount = {
+    id: `usr_auto_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    username: rawPhone,
+    phone: rawPhone,
+    password: rawPhone,
+    name: params.name?.trim() || rawPhone,
+    email: cleanEmail && cleanEmail.includes("@") ? cleanEmail : "",
+    googleConnected: false,
+    emailVerified: false,
+    autoCreatedFromOrder: true,
+    createdAt: new Date().toISOString(),
+  };
+
+  const updatedUsers = [newUser, ...users];
+  saveRegisteredUsers(updatedUsers);
+  setActiveUserAccount(newUser.id);
+  setActiveCustomerPhone(rawPhone);
+  return { user: newUser, isNewAccount: true };
+}
+
+export function isUserUsingDefaultPassword(user: RegisteredUserAccount | null): boolean {
+  if (!user) return false;
+  if (user.autoCreatedFromOrder && user.password === user.phone) return true;
+  if (user.phone && user.password && user.password === user.phone) return true;
+  if (user.username && user.password && user.password === user.username) return true;
+  return false;
+}
+
 export function loginUserAccount(
   identifier: string,
   password: string

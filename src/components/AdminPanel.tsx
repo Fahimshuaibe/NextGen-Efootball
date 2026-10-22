@@ -2582,7 +2582,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                             <span>অ্যাডমিন জিমেইল নোটিফিকেশন (Email Alerts)</span>
                           </h4>
                           <p className="text-[11px] text-slate-300 mt-0.5">
-                            যেকোনো অর্ডার প্লেস হওয়ার সাথে সাথে অ্যাডমিন জিমেইলে (<b>{secConfig.securityEmail || "shuaivehasanfahim@gmail.com"}</b>) স্বয়ংক্রিয়ভাবে ফুল ডিটেইলস ইমেইল পাঠানো হয়।
+                            টেলিগ্রাম ও WhatsApp কানেক্ট থাকায় অ্যাডমিনের ইনবক্সে অতিরিক্ত ইমেইল অ্যালার্ট বন্ধ রাখা হয়েছে। তবে <b>গ্রাহক/ইউজারের জিমেইলে</b> অর্ডার কনফার্মেশন ও ডিজিটাল রিসিট ১০০% স্বয়ংক্রিয়ভাবে পাঠানো হয়।
                           </p>
                         </div>
                         <button
