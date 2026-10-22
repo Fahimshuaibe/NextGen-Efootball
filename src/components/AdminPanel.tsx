@@ -1,0 +1,2638 @@
+import React, { useState, useEffect } from "react";
+import { 
+  Order, 
+  OrderStatus, 
+  AdminSecurityConfig, 
+  BlockedUser, 
+  CustomerAccount, 
+  ShopSettings,
+  LiveChatMessage 
+} from "../types";
+import { 
+  getOrders, 
+  updateOrderStatus, 
+  deleteOrder, 
+  updateOrderDetails,
+  getAdminOnlineStatus, 
+  setAdminOnlineStatus,
+  getAdminSecurityConfig,
+  updateAdminSecurityConfig,
+  verifySecurityCredentials,
+  getShopSettings,
+  updateShopSettings,
+  getBlockedUsers,
+  blockUserManual,
+  unblockUser,
+  recordFailedStrike,
+  getAllCustomerAccounts,
+  updateRegisteredUser,
+  registerUserAccount,
+  deleteRegisteredUser,
+  getAllChatConversations,
+  getLiveChatMessages,
+  sendLiveChatMessage,
+  markChatAsRead,
+  getActiveCustomerPhone,
+  getNotificationLogs
+} from "../utils/storage";
+import { 
+  playOrderNotificationSound, 
+  requestNotificationPermission, 
+  triggerDesktopNotification 
+} from "../utils/notification";
+import { 
+  formatBdWhatsappForUrl, 
+  formatBdPhonePretty, 
+  toBn, 
+  convertBnToEnDigits, 
+  getLoginStartWhatsappMessage,
+  getOtpRequestWhatsappMessage,
+  getCompletedOrderWhatsappMessage 
+} from "../utils/order";
+import { SITE } from "../config";
+import { 
+  Lock, 
+  Search, 
+  CheckCircle2, 
+  Clock, 
+  AlertTriangle, 
+  Copy, 
+  Check, 
+  MessageCircle, 
+  Eye, 
+  EyeOff, 
+  Trash2, 
+  FileText, 
+  RefreshCw,
+  LogOut,
+  TrendingUp,
+  Package,
+  ArrowLeft,
+  Bell,
+  BellRing,
+  Volume2,
+  Power,
+  Phone,
+  Edit2,
+  ExternalLink,
+  Shield,
+  ShieldAlert,
+  Settings,
+  Users,
+  KeyRound,
+  Share2,
+  Ban,
+  Headphones,
+  Send,
+  MessageSquare,
+  Gift,
+  HelpCircle,
+  Play
+} from "lucide-react";
+import { LiveChatModal } from "./LiveChatModal";
+import {
+  sendTestAutoWhatsappAlert,
+  dispatchOrderStatusNotification,
+} from "../utils/autoNotify";
+import {
+  getEventTypeForStatus,
+  getOrderStatusLabelBn,
+} from "../utils/orderNotification";
+
+interface Props {
+  onClose: () => void;
+  onViewReceipt: (order: Order) => void;
+}
+
+type AdminTab = "orders" | "chat" | "security" | "settings" | "fraud" | "customers";
+
+export function AdminPanel({ onClose, onViewReceipt }: Props) {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return sessionStorage.getItem("nextgen_admin_auth") === "true";
+  });
+  const [activeTab, setActiveTab] = useState<AdminTab>("orders");
+  const [isAdminOnline, setIsAdminOnline] = useState<boolean>(getAdminOnlineStatus);
+  const [pinInput, setPinInput] = useState("");
+  const [showPinInput, setShowPinInput] = useState(false);
+  const [pinError, setPinError] = useState("");
+  // Per-User / Per-Device Lockout Tracking (so other users never lock out the Admin)
+  const getCurrentUserLockKey = (): { key: string; label: string; phone: string } => {
+    const activePhone = getActiveCustomerPhone();
+    let deviceId = localStorage.getItem("nextgen_visitor_user_id");
+    if (!deviceId) {
+      deviceId = "USR-" + Math.random().toString(36).substring(2, 8).toUpperCase();
+      localStorage.setItem("nextgen_visitor_user_id", deviceId);
+    }
+    if (activePhone) {
+      return { key: `USER_${activePhone}`, label: `ইউজার (${activePhone})`, phone: activePhone };
+    }
+    return { key: `DEV_${deviceId}`, label: `ইউজার আইডি (${deviceId})`, phone: "" };
+  };
+
+  const getUserLockRecord = () => {
+    try {
+      const { key } = getCurrentUserLockKey();
+      const raw = localStorage.getItem("nextgen_admin_user_locks_v2");
+      const map = raw ? JSON.parse(raw) : {};
+      return map[key] || { attempts: 0, lockoutUntil: 0 };
+    } catch {
+      return { attempts: 0, lockoutUntil: 0 };
+    }
+  };
+
+  const [failedLoginAttempts, setFailedLoginAttempts] = useState<number>(() => getUserLockRecord().attempts);
+  const [lockoutUntil, setLockoutUntil] = useState<number>(() => getUserLockRecord().lockoutUntil);
+  const [showResetPinOnLogin, setShowResetPinOnLogin] = useState(false);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [showPasswords, setShowPasswords] = useState<{ [orderNo: string]: boolean }>({});
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(() => {
+    return typeof Notification !== "undefined" && Notification.permission === "granted";
+  });
+  const [editingOrder, setEditingOrder] = useState<{ orderNo: string; phone: string; otpWhatsapp: string } | null>(null);
+
+  // Security Credentials State
+  const [secConfig, setSecConfig] = useState<AdminSecurityConfig>(getAdminSecurityConfig);
+  const [verifyEmail, setVerifyEmail] = useState("");
+  const [verifyPassword, setVerifyPassword] = useState("");
+  const [isSecUnlocked, setIsSecUnlocked] = useState(false);
+  const [secVerifyError, setSecVerifyError] = useState("");
+  const [newAdminPin, setNewAdminPin] = useState("");
+  const [confirmNewAdminPin, setConfirmNewAdminPin] = useState("");
+  const [newSecEmail, setNewSecEmail] = useState("");
+  const [newSecPassword, setNewSecPassword] = useState("");
+  const [secSuccessMsg, setSecSuccessMsg] = useState("");
+
+  // Shop Settings State
+  const [shopSettings, setShopSettingsState] = useState<ShopSettings>(getShopSettings);
+  const [settingsSuccessMsg, setSettingsSuccessMsg] = useState("");
+
+  // Blocked Users State
+  const [blockedList, setBlockedList] = useState<BlockedUser[]>(getBlockedUsers);
+
+  // Automatic Order Notification Loading, Feedback & Log Viewer State
+  const [notifyingOrders, setNotifyingOrders] = useState<Record<string, boolean>>({});
+  const [notificationFeedback, setNotificationFeedback] = useState<{
+    type: "success" | "warning" | "error";
+    text: string;
+    orderNo?: string;
+    status?: OrderStatus;
+  } | null>(null);
+  const [expandedLogOrderNo, setExpandedLogOrderNo] = useState<string | null>(null);
+  const [manualBlockPhone, setManualBlockPhone] = useState("");
+  const [manualBlockReason, setManualBlockReason] = useState("");
+
+  // Customer accounts & Admin user management state
+  const [customers, setCustomers] = useState<CustomerAccount[]>([]);
+  const [showUserPassMap, setShowUserPassMap] = useState<{ [key: string]: boolean }>({});
+  const [editingUser, setEditingUser] = useState<{
+    id: string;
+    name: string;
+    username: string;
+    email: string;
+    phone: string;
+    password: string;
+    emailVerified: boolean;
+  } | null>(null);
+  const [userAdminMsg, setUserAdminMsg] = useState("");
+
+  // Live Chat inside Admin Panel
+  const [chatConversations, setChatConversations] = useState<any[]>([]);
+  const [activeChatPhone, setActiveChatPhone] = useState<string>("");
+  const [activeChatMessages, setActiveChatMessages] = useState<LiveChatMessage[]>([]);
+  const [chatInputText, setChatInputText] = useState("");
+
+  // Quick Chat Modal for an order
+  const [chatModalOrder, setChatModalOrder] = useState<Order | null>(null);
+
+  const loadData = () => {
+    setOrders(getOrders());
+    setBlockedList(getBlockedUsers());
+    setCustomers(getAllCustomerAccounts());
+    setSecConfig(getAdminSecurityConfig());
+    setShopSettingsState(getShopSettings());
+    const convos = getAllChatConversations();
+    setChatConversations(convos);
+    if (activeChatPhone) {
+      setActiveChatMessages(getLiveChatMessages(activeChatPhone));
+    } else if (convos.length > 0) {
+      setActiveChatPhone(convos[0].phone);
+      setActiveChatMessages(getLiveChatMessages(convos[0].phone));
+    }
+  };
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      loadData();
+    }
+
+    const handleUpdate = () => {
+      loadData();
+    };
+    const handleChatUpdate = () => {
+      setChatConversations(getAllChatConversations());
+      if (activeChatPhone) {
+        setActiveChatMessages(getLiveChatMessages(activeChatPhone));
+      }
+    };
+
+    window.addEventListener("nextgen_orders_updated", handleUpdate);
+    window.addEventListener("nextgen_blocked_users_updated", handleUpdate);
+    window.addEventListener("nextgen_chat_updated", handleChatUpdate);
+    return () => {
+      window.removeEventListener("nextgen_orders_updated", handleUpdate);
+      window.removeEventListener("nextgen_blocked_users_updated", handleUpdate);
+      window.removeEventListener("nextgen_chat_updated", handleChatUpdate);
+    };
+  }, [isAuthenticated, activeChatPhone]);
+
+  const saveUserLockRecord = (attempts: number, lockTime: number) => {
+    try {
+      const { key, label } = getCurrentUserLockKey();
+      const raw = localStorage.getItem("nextgen_admin_user_locks_v2");
+      const map = raw ? JSON.parse(raw) : {};
+      if (attempts === 0 && lockTime === 0) {
+        delete map[key];
+      } else {
+        map[key] = { attempts, lockoutUntil: lockTime, label, updatedAt: new Date().toISOString() };
+      }
+      localStorage.setItem("nextgen_admin_user_locks_v2", JSON.stringify(map));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    const now = Date.now();
+    const currentConfig = getAdminSecurityConfig();
+    const cleanInput = pinInput.trim();
+    const userInfo = getCurrentUserLockKey();
+
+    // Real Admin Master Password ALWAYS works immediately (never locked out even if someone else tried on this device)
+    if (cleanInput === currentConfig.securityPassword) {
+      setIsAuthenticated(true);
+      sessionStorage.setItem("nextgen_admin_auth", "true");
+      saveUserLockRecord(0, 0);
+      setFailedLoginAttempts(0);
+      setLockoutUntil(0);
+      setPinError("");
+      loadData();
+      return;
+    }
+
+    // Check if THIS specific user/account is currently locked from PIN guessing
+    if (lockoutUntil > now) {
+      const minsLeft = Math.ceil((lockoutUntil - now) / 60000);
+      setPinError(
+        `⛔ আপনার ${userInfo.label} থেকে ৫ বার ভুল পিন দেওয়ার কারণে শুধু আপনার অ্যাকাউন্টটি ${toBn(minsLeft)} মিনিটের জন্য লক করা হয়েছে। (আসল অ্যাডমিন নিচে মাস্টার পাসওয়ার্ড দিয়ে যেকোনো সময় ঢুকতে পারবেন)`
+      );
+      return;
+    }
+
+    if (cleanInput === currentConfig.adminPin) {
+      setIsAuthenticated(true);
+      sessionStorage.setItem("nextgen_admin_auth", "true");
+      saveUserLockRecord(0, 0);
+      setFailedLoginAttempts(0);
+      setLockoutUntil(0);
+      setPinError("");
+      loadData();
+    } else {
+      const nextAttempts = failedLoginAttempts + 1;
+      setFailedLoginAttempts(nextAttempts);
+
+      if (nextAttempts >= 5) {
+        const lockTime = Date.now() + 15 * 60 * 1000; // 15 minutes lockout for THIS user only
+        setLockoutUntil(lockTime);
+        saveUserLockRecord(nextAttempts, lockTime);
+        if (userInfo.phone) {
+          blockUserManual(userInfo.phone, "৫ বার ভুল অ্যাডমিন পিন দিয়ে অনুপ্রবেশের চেষ্টা করায় অটো-ব্লক");
+        }
+        setPinError(
+          `⛔ ৫ বার ভুল পিন দেওয়ায় শুধুমাত্র আপনার ${userInfo.label} ১৫ মিনিটের জন্য লক করা হয়েছে! (মূল অ্যাডমিনের অ্যাক্সেস সম্পূর্ণ সচল আছে)`
+        );
+      } else {
+        saveUserLockRecord(nextAttempts, 0);
+        setPinError(
+          `ভুল সিকিউরিটি পিন! আপনার (${userInfo.label}) চেষ্টা বাকি: ${toBn(5 - nextAttempts)} বার`
+        );
+      }
+    }
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    sessionStorage.removeItem("nextgen_admin_auth");
+    setIsSecUnlocked(false);
+  };
+
+  const handleToggleOnlineStatus = () => {
+    const nextStatus = !isAdminOnline;
+    setIsAdminOnline(nextStatus);
+    setAdminOnlineStatus(nextStatus);
+  };
+
+  const handleEnableNotifications = async () => {
+    const granted = await requestNotificationPermission();
+    setNotificationsEnabled(granted);
+    if (granted) {
+      triggerDesktopNotification("নোটিফিকেশন সক্রিয়", "NextGen Efootball নতুন অর্ডার নোটিফিকেশন চালু হয়েছে!");
+    }
+  };
+
+  const handleTestSound = () => {
+    playOrderNotificationSound();
+  };
+
+  const copyToClipboard = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+
+  const togglePasswordVisibility = (orderNo: string) => {
+    setShowPasswords(prev => ({ ...prev, [orderNo]: !prev[orderNo] }));
+  };
+
+  const triggerAdminStatusNotification = async (
+    updatedOrder: Order,
+    status: OrderStatus,
+    forceRetry = false
+  ) => {
+    setNotifyingOrders((prev) => ({ ...prev, [updatedOrder.orderNo]: true }));
+    try {
+      const eventType = getEventTypeForStatus(status, false);
+      const res = await dispatchOrderStatusNotification({
+        order: updatedOrder,
+        eventType,
+        forceRetry,
+        isAdminAuthorized: isAuthenticated,
+      });
+
+      setNotificationFeedback({
+        type: res.skippedDuplicate ? "warning" : res.ok ? "success" : "error",
+        text: res.message,
+        orderNo: updatedOrder.orderNo,
+        status,
+      });
+      loadData();
+    } catch (err: any) {
+      setNotificationFeedback({
+        type: "error",
+        text: `ইমেইল পাঠাতে ত্রুটি (${err?.message || "Error"}), তবে অর্ডার স্ট্যাটাস সফলভাবে আপডেট হয়েছে।`,
+        orderNo: updatedOrder.orderNo,
+        status,
+      });
+    } finally {
+      setNotifyingOrders((prev) => ({ ...prev, [updatedOrder.orderNo]: false }));
+    }
+  };
+
+  const handleStatusChange = async (
+    orderNo: string,
+    status: OrderStatus,
+    forceRetry = false
+  ) => {
+    if (!isAuthenticated) {
+      setNotificationFeedback({
+        type: "error",
+        text: "শুধুমাত্র অনুমোদিত অ্যাডমিন অর্ডার স্ট্যাটাস পরিবর্তন করতে পারবেন।",
+      });
+      return;
+    }
+
+    const updated = updateOrderStatus(orderNo, status, undefined, {
+      requireAdminAuth: true,
+      updatedBy: "admin",
+    });
+    loadData();
+
+    if (updated) {
+      await triggerAdminStatusNotification(updated, status, forceRetry);
+    }
+  };
+
+  const handleDelete = (orderNo: string) => {
+    if (window.confirm(`আপনি কি নিশ্চিত অর্ডার #${orderNo} মুছে ফেলতে চান?`)) {
+      deleteOrder(orderNo);
+      loadData();
+    }
+  };
+
+  // ORDER PROGRESSION PIPELINE HANDLERS
+  // Step 1: Confirm Payment -> Move to Processing & Send Processing Notification
+  const handleConfirmPayment = (order: Order) => {
+    updateOrderDetails(order.orderNo, {
+      status: "processing",
+      paymentConfirmed: true,
+    });
+    loadData();
+  };
+
+  // Step 2: Start Login -> Generate WhatsApp / Manual notice
+  const handleStartLogin = (order: Order) => {
+    updateOrderDetails(order.orderNo, {
+      loginStartSent: true
+    });
+    loadData();
+
+    const msg = getLoginStartWhatsappMessage(order.name, order.orderNo);
+    const whatsappNum = formatBdWhatsappForUrl(order.otpWhatsapp || order.phone);
+
+    if (order.contactMethod === "facebook" || !whatsappNum) {
+      // User doesn't use WhatsApp or prefers Facebook
+      copyToClipboard(msg, `start_${order.orderNo}`);
+      if (order.contactHandle && order.contactHandle.startsWith("http")) {
+        window.open(order.contactHandle, "_blank");
+      }
+    } else {
+      window.open(`https://wa.me/${whatsappNum}?text=${encodeURIComponent(msg)}`, "_blank");
+    }
+  };
+
+  const handleToggleUserActiveConfirmed = (order: Order) => {
+    const nextVal = !order.userActiveConfirmed;
+    updateOrderDetails(order.orderNo, {
+      userActiveConfirmed: nextVal
+    });
+    loadData();
+  };
+
+  // Step 3: Request OTP -> Generate WhatsApp / Manual message with 5 min countdown notice
+  const handleRequestOtp = (order: Order) => {
+    updateOrderDetails(order.orderNo, {
+      otpRequested: true,
+      otpRequestedAt: new Date().toISOString()
+    });
+    loadData();
+
+    const msg = getOtpRequestWhatsappMessage(
+      order.name,
+      order.orderNo,
+      order.konamiIdOrEmail
+    );
+    const whatsappNum = formatBdWhatsappForUrl(order.otpWhatsapp || order.phone);
+
+    if (order.contactMethod === "facebook" || !whatsappNum) {
+      copyToClipboard(msg, `otp_${order.orderNo}`);
+      if (order.contactHandle && order.contactHandle.startsWith("http")) {
+        window.open(order.contactHandle, "_blank");
+      }
+    } else {
+      window.open(`https://wa.me/${whatsappNum}?text=${encodeURIComponent(msg)}`, "_blank");
+    }
+  };
+
+  // Step 4: Complete Order -> Generates completion message with Facebook review link & receipt
+  const handleCompleteOrder = (order: Order) => {
+    const updated = updateOrderDetails(order.orderNo, {
+      status: "completed"
+    });
+    loadData();
+    if (updated) {
+      triggerAdminStatusNotification(updated, "completed", false).catch(() => {});
+    }
+
+    const msg = getCompletedOrderWhatsappMessage(
+      order.name,
+      order.orderNo,
+      order.packageName,
+      shopSettings.facebookUrl
+    );
+    const whatsappNum = formatBdWhatsappForUrl(order.otpWhatsapp || order.phone);
+
+    if (order.contactMethod === "facebook" || !whatsappNum) {
+      copyToClipboard(msg, `complete_${order.orderNo}`);
+      if (order.contactHandle && order.contactHandle.startsWith("http")) {
+        window.open(order.contactHandle, "_blank");
+      }
+    } else {
+      window.open(`https://wa.me/${whatsappNum}?text=${encodeURIComponent(msg)}`, "_blank");
+    }
+  };
+
+  // Wrong Password notice
+  const handleWrongPasswordNotice = (order: Order) => {
+    const msg = `আসসালামু আলাইকুম ${order.name} ভাই, NextGen Efootball থেকে বলছি।\n\n` +
+      `আপনার অর্ডার #${order.orderNo} এ দেওয়া Konami আইডি বা পাসওয়ার্ড ভুল দেখাচ্ছে। দয়া করে সঠিক পাসওয়ার্ড দিন।`;
+    const whatsappNum = formatBdWhatsappForUrl(order.otpWhatsapp || order.phone);
+    if (order.contactMethod === "facebook" || !whatsappNum) {
+      copyToClipboard(msg, `wrong_${order.orderNo}`);
+    } else {
+      window.open(`https://wa.me/${whatsappNum}?text=${encodeURIComponent(msg)}`, "_blank");
+    }
+  };
+
+  // 3-strike Fraud/Invalid TrxID
+  const handleMarkFakeOrStrike = (order: Order) => {
+    if (window.confirm(`আপনি কি নিশ্চিত ${order.phone} কে ১টি স্ট্রাইক দিতে চান? ৩টি স্ট্রাইক হলে নম্বরটি অটোমেটিক ব্লক হবে।`)) {
+      const res = recordFailedStrike(order.phone, `ভুল TrxID/পাসওয়ার্ড (অর্ডার #${order.orderNo})`);
+      const updated = updateOrderDetails(order.orderNo, {
+        isFakeOrInvalidStrike: true,
+        status: "cancelled",
+        adminNotes: "ভুল TrxID বা লগইন তথ্যের কারণে বাতিল করা হয়েছে",
+      });
+      loadData();
+      if (updated) {
+        triggerAdminStatusNotification(updated, "cancelled", false).catch(() => {});
+      }
+      if (res.blocked) {
+        alert(`🚨 কাস্টমার ${order.phone} ৩ বার ভুল তথ্য দেওয়ায় সম্পূর্ণ ব্লক হয়েছে!`);
+      } else {
+        alert(`⚠️ কাস্টমার ${order.phone} এর স্ট্রাইক সংখ্যা: ${res.strikes}/৩`);
+      }
+    }
+  };
+
+  // Admin chat send
+  const handleAdminSendChat = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!chatInputText.trim() || !activeChatPhone) return;
+
+    sendLiveChatMessage({
+      phone: activeChatPhone,
+      customerName: "NextGen Admin",
+      sender: "admin",
+      text: chatInputText.trim()
+    });
+
+    setChatInputText("");
+    setActiveChatMessages(getLiveChatMessages(activeChatPhone));
+  };
+
+  // Unlock Security Settings
+  const handleVerifySecurity = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (verifySecurityCredentials(verifyEmail, verifyPassword)) {
+      setIsSecUnlocked(true);
+      setSecVerifyError("");
+      setNewAdminPin(secConfig.adminPin);
+      setConfirmNewAdminPin(secConfig.adminPin);
+      setNewSecEmail(secConfig.securityEmail);
+      setNewSecPassword(secConfig.securityPassword);
+    } else {
+      setSecVerifyError("ভুল সিকিউরিটি ইমেইল বা সিকিউরিটি পাসওয়ার্ড! সঠিক তথ্য দিন।");
+    }
+  };
+
+  // Save new security settings
+  const handleSaveSecurity = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newAdminPin.trim() !== confirmNewAdminPin.trim()) {
+      alert("নতুন পিন এবং নিশ্চিতকরণ পিন মিলছে না!");
+      return;
+    }
+    const updated = updateAdminSecurityConfig({
+      adminPin: newAdminPin.trim(),
+      securityEmail: newSecEmail.trim() || secConfig.securityEmail,
+      securityPassword: newSecPassword.trim() || secConfig.securityPassword
+    });
+    setSecConfig(updated);
+    setSecSuccessMsg("অ্যাডমিন পিন ও সিকিউরিটি ক্রেডেনশিয়াল সফলভাবে আপডেট করা হয়েছে!");
+    setTimeout(() => setSecSuccessMsg(""), 4000);
+  };
+
+  // Save Shop Settings
+  const handleSaveShopSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    const updated = updateShopSettings(shopSettings);
+    setShopSettingsState(updated);
+    setSettingsSuccessMsg("শপ ও পেমেন্ট সেটিংস সফলভাবে আপডেট হয়েছে!");
+    setTimeout(() => setSettingsSuccessMsg(""), 4000);
+  };
+
+  const handleSaveEditedNumbers = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingOrder) return;
+    updateOrderDetails(editingOrder.orderNo, {
+      phone: editingOrder.phone.trim(),
+      otpWhatsapp: formatBdWhatsappForUrl(editingOrder.otpWhatsapp.trim())
+    });
+    setEditingOrder(null);
+    loadData();
+  };
+
+  // Metrics
+  const totalOrders = orders.length;
+  const pendingOrders = orders.filter(o => o.status === "pending").length;
+  const processingOrders = orders.filter(o => o.status === "processing").length;
+  const completedOrders = orders.filter(o => o.status === "completed").length;
+  const totalRevenue = orders.reduce((sum, o) => sum + (o.status !== "cancelled" ? o.price : 0), 0);
+  const totalUnreadChats = chatConversations.reduce((sum, c) => sum + c.unreadCount, 0);
+
+  // Filters
+  const filteredOrders = orders.filter(o => {
+    const matchesStatus = filterStatus === "all" || o.status === filterStatus;
+    const query = searchQuery.toLowerCase().trim();
+    const matchesSearch = !query || 
+      o.orderNo.toLowerCase().includes(query) ||
+      o.name.toLowerCase().includes(query) ||
+      o.phone.includes(query) ||
+      (o.otpWhatsapp && o.otpWhatsapp.includes(query)) ||
+      (o.contactHandle && o.contactHandle.toLowerCase().includes(query)) ||
+      o.konamiIdOrEmail.toLowerCase().includes(query) ||
+      o.trxId.toLowerCase().includes(query);
+    return matchesStatus && matchesSearch;
+  });
+
+  if (!isAuthenticated) {
+    const isCurrentlyLocked = lockoutUntil > Date.now();
+    const currentUserInfo = getCurrentUserLockKey();
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-6 sm:p-8 relative">
+          <button
+            onClick={onClose}
+            className="absolute top-4 right-4 p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition cursor-pointer"
+          >
+            ✕
+          </button>
+          
+          <div className="text-center mb-5">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 grid place-items-center mb-3">
+              <Shield className="w-7 h-7" />
+            </div>
+            <h3 className="text-xl font-extrabold text-white">NextGen Efootball অ্যাডমিন সিকিউরিটি</h3>
+            <p className="text-xs text-slate-400 mt-1">
+              শুধুমাত্র অনুমোদিত অ্যাডমিন প্রবেশের জন্য সিকিউরিটি পিন বা মাস্টার পাসওয়ার্ড দিন
+            </p>
+            <div className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[11px] text-emerald-300 font-semibold">
+              <Lock className="w-3 h-3" />
+              <span>ইউজার-ভিত্তিক লক: অন্য কেউ ভুল পিন দিলে শুধু সেই ইউজার লক হবে, আপনি নন</span>
+            </div>
+          </div>
+
+          {!showResetPinOnLogin ? (
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-300">
+                    {isCurrentlyLocked
+                      ? "মাস্টার সিকিউরিটি পাসওয়ার্ড দিন (অ্যাডমিন আনলক) *"
+                      : "অ্যাডমিন সিকিউরিটি পিন / মাস্টার পাসওয়ার্ড *"}
+                  </label>
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    {currentUserInfo.label}
+                  </span>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showPinInput ? "text" : "password"}
+                    maxLength={32}
+                    value={pinInput}
+                    onChange={(e) => setPinInput(e.target.value)}
+                    placeholder={
+                      isCurrentlyLocked
+                        ? "অ্যাডমিন মাস্টার পাসওয়ার্ড লিখুন..."
+                        : "সিকিউরিটি পিন বা পাসওয়ার্ড লিখুন..."
+                    }
+                    autoFocus
+                    className="w-full px-4 py-3 pr-11 bg-slate-950 border border-slate-700 rounded-xl text-white text-center text-base tracking-widest focus:outline-none focus:border-cyan-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPinInput(!showPinInput)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                  >
+                    {showPinInput ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {pinError && (
+                <p className="text-xs text-rose-400 text-center bg-rose-500/10 py-2 px-3 rounded-lg border border-rose-500/20">
+                  {pinError}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-3 bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black font-extrabold text-sm rounded-xl transition cursor-pointer shadow-lg shadow-cyan-500/20"
+              >
+                {isCurrentlyLocked ? "মাস্টার পাসওয়ার্ড দিয়ে প্রবেশ করুন" : "অ্যাডমিন প্যানেলে প্রবেশ করুন"}
+              </button>
+
+              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400">
+                <span className="flex items-center gap-1">
+                  <Lock className="w-3 h-3 text-emerald-400" />
+                  <span>অন্য ইউজার ৫ বার ভুল করলে শুধু তার আইডি লক হবে</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowResetPinOnLogin(true);
+                    setSecVerifyError("");
+                  }}
+                  className="text-cyan-400 hover:underline font-semibold cursor-pointer"
+                >
+                  ইমেইল দিয়ে লগইন / পিন রিসেট
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="space-y-4">
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs">
+                🔑 পিন রিসেট বা যেকোনো লক আনলক করে সরাসরি ঢুকতে আপনার অ্যাডমিন সিকিউরিটি ইমেইল ও মাস্টার পাসওয়ার্ড দিন:
+              </div>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (verifySecurityCredentials(verifyEmail, verifyPassword)) {
+                    saveUserLockRecord(0, 0);
+                    setFailedLoginAttempts(0);
+                    setLockoutUntil(0);
+                    setIsAuthenticated(true);
+                    sessionStorage.setItem("nextgen_admin_auth", "true");
+                    setIsSecUnlocked(true);
+                    setActiveTab("security");
+                    loadData();
+                  } else {
+                    setSecVerifyError("ভুল সিকিউরিটি ইমেইল বা মাস্টার পাসওয়ার্ড!");
+                  }
+                }}
+                className="space-y-3"
+              >
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
+                    সিকিউরিটি ইমেইল *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={verifyEmail}
+                    onChange={(e) => setVerifyEmail(e.target.value)}
+                    placeholder="আপনার অ্যাডমিন সিকিউরিটি ইমেইল দিন"
+                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">
+                    মাস্টার সিকিউরিটি পাসওয়ার্ড *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={verifyPassword}
+                    onChange={(e) => setVerifyPassword(e.target.value)}
+                    placeholder="আপনার মাস্টার পাসওয়ার্ড দিন"
+                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
+                {secVerifyError && (
+                  <p className="text-xs text-rose-400 bg-rose-500/10 py-1.5 px-3 rounded-lg border border-rose-500/20">
+                    {secVerifyError}
+                  </p>
+                )}
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowResetPinOnLogin(false)}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold cursor-pointer"
+                  >
+                    ফিরে যান
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-black font-extrabold text-xs cursor-pointer"
+                  >
+                    ভেরিফাই করে প্রবেশ করুন
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-950 text-slate-100 overflow-hidden font-sans">
+      {/* Top Navbar */}
+      <header className="border-b border-slate-800 bg-slate-900/95 backdrop-blur px-4 py-3 shrink-0">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={onClose}
+                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                title="মূল ওয়েবসাইটে ফিরুন"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+              <div>
+                <h1 className="font-extrabold text-white text-base sm:text-lg flex items-center gap-2">
+                  <span>{shopSettings.siteName} অ্যাডমিন ড্যাশবোর্ড</span>
+                  <span className="text-xs font-mono font-normal text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-full border border-cyan-500/30">
+                    Pro Hub
+                  </span>
+                </h1>
+                <p className="text-[11px] text-slate-400">রিয়েলটাইম অর্ডার পাইপলাইন, লাইভ চ্যাট ও সেটিংস</p>
+              </div>
+            </div>
+
+            {/* Mobile close */}
+            <button
+              onClick={handleLogout}
+              className="md:hidden p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Quick Action Controls in Header */}
+          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
+            {/* ONLINE / OFFLINE TOGGLE */}
+            <button
+              onClick={handleToggleOnlineStatus}
+              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-black transition cursor-pointer border shadow-sm ${
+                isAdminOnline 
+                  ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30"
+                  : "bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30 animate-pulse"
+              }`}
+            >
+              <Power className={`w-3.5 h-3.5 ${isAdminOnline ? "text-emerald-400" : "text-rose-400"}`} />
+              <span>{isAdminOnline ? "🟢 অনলাইন (ডেলিভারি চালু)" : "🔴 অফলাইন / ব্যস্ত"}</span>
+            </button>
+
+            {/* Notification controls */}
+            <button
+              onClick={handleEnableNotifications}
+              className={`p-2 rounded-xl border text-xs font-medium transition cursor-pointer ${
+                notificationsEnabled
+                  ? "bg-cyan-500/10 text-cyan-300 border-cyan-500/30"
+                  : "bg-slate-800 text-slate-400 border-slate-700 hover:text-white"
+              }`}
+              title={notificationsEnabled ? "নোটিফিকেশন সক্রিয়" : "নোটিফিকেশন চালু করুন"}
+            >
+              {notificationsEnabled ? <BellRing className="w-4 h-4 text-cyan-400" /> : <Bell className="w-4 h-4" />}
+            </button>
+
+            <button
+              onClick={handleTestSound}
+              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition cursor-pointer"
+              title="সাউন্ড অ্যালার্ট টেস্ট"
+            >
+              <Volume2 className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={loadData}
+              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition cursor-pointer"
+              title="রিফ্রেশ করুন"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={handleLogout}
+              className="hidden md:inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-bold transition cursor-pointer border border-rose-500/30"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>লগআউট</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Admin Navigation Tabs */}
+      <nav className="border-b border-slate-800 bg-slate-900/60 px-4 shrink-0 overflow-x-auto">
+        <div className="max-w-7xl mx-auto flex items-center gap-2 py-2">
+          <button
+            onClick={() => setActiveTab("orders")}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+              activeTab === "orders"
+                ? "bg-cyan-500 text-black shadow-md shadow-cyan-500/20"
+                : "text-slate-400 hover:text-white hover:bg-slate-800"
+            }`}
+          >
+            <Package className="w-4 h-4" />
+            <span>অর্ডার পাইপলাইন ({toBn(orders.length)})</span>
+            {pendingOrders > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-amber-400 text-black text-[10px] font-black animate-pulse">
+                {toBn(pendingOrders)}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab("chat")}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+              activeTab === "chat"
+                ? "bg-cyan-500 text-black shadow-md shadow-cyan-500/20"
+                : "text-slate-400 hover:text-white hover:bg-slate-800"
+            }`}
+          >
+            <Headphones className="w-4 h-4" />
+            <span>লাইভ চ্যাট</span>
+            {totalUnreadChats > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-emerald-400 text-black text-[10px] font-black animate-pulse">
+                {toBn(totalUnreadChats)}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab("customers")}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+              activeTab === "customers"
+                ? "bg-cyan-500 text-black shadow-md shadow-cyan-500/20"
+                : "text-slate-400 hover:text-white hover:bg-slate-800"
+            }`}
+          >
+            <Users className="w-4 h-4" />
+            <span>কাস্টমার তালিকা ({toBn(customers.length)})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("security")}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+              activeTab === "security"
+                ? "bg-cyan-500 text-black shadow-md shadow-cyan-500/20"
+                : "text-slate-400 hover:text-white hover:bg-slate-800"
+            }`}
+          >
+            <KeyRound className="w-4 h-4" />
+            <span>পাসওয়ার্ড ও সিকিউরিটি</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("settings")}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+              activeTab === "settings"
+                ? "bg-cyan-500 text-black shadow-md shadow-cyan-500/20"
+                : "text-slate-400 hover:text-white hover:bg-slate-800"
+            }`}
+          >
+            <Settings className="w-4 h-4" />
+            <span>শপ ও পেমেন্ট সেটিংস</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("fraud")}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+              activeTab === "fraud"
+                ? "bg-rose-500 text-white shadow-md shadow-rose-500/20"
+                : "text-slate-400 hover:text-white hover:bg-slate-800"
+            }`}
+          >
+            <ShieldAlert className="w-4 h-4" />
+            <span>ফ্রড ও ব্লক তালিকা ({toBn(blockedList.length)})</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* Main Content Area */}
+      <main className="flex-1 overflow-y-auto p-4 sm:p-6 bg-[#070d1d]">
+        <div className="max-w-7xl mx-auto space-y-6">
+
+          {/* TAB 1: ORDERS PIPELINE */}
+          {activeTab === "orders" && (
+            <div className="space-y-6">
+              {/* Automatic WhatsApp Bot Status Banner */}
+              {!shopSettings.callmebotApiKey?.trim() && !shopSettings.whatsappWebhookUrl?.trim() ? (
+                <div className="p-4 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="text-xs sm:text-sm font-extrabold text-emerald-300 flex items-center gap-1.5">
+                      <BellRing className="w-4 h-4 text-emerald-400 animate-bounce" />
+                      <span>নতুন অর্ডার আসলে আপনার WhatsApp-এ অটোমেটিক মেসেজ পেতে চান? (কাস্টমারের WhatsApp না থাকলেও)</span>
+                    </div>
+                    <p className="text-[11px] text-slate-300">
+                      সেটিংস থেকে ফ্রি অটো-হোয়াটসঅ্যাপ বট (CallMeBot) ১ ক্লিকে চালু করে নিন। তাহলে যেকোনো কাস্টমার অর্ডার দিলেই সাথে সাথে আপনার WhatsApp-এ অটো মেসেজ চলে যাবে!
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab("settings")}
+                    className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs shrink-0 cursor-pointer shadow-md shadow-emerald-500/20"
+                  >
+                    ⚙️ অটো WhatsApp চালু করুন
+                  </button>
+                </div>
+              ) : (
+                <div className="px-4 py-2.5 rounded-xl bg-emerald-950/30 border border-emerald-500/30 flex items-center justify-between text-xs text-emerald-300">
+                  <span className="flex items-center gap-2 font-bold">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>অটোমেটিক WhatsApp অর্ডার অ্যালার্ট চালু আছে ({shopSettings.autoWhatsappPhone || shopSettings.whatsapp})</span>
+                  </span>
+                  <button
+                    onClick={() => setActiveTab("settings")}
+                    className="text-[11px] underline text-cyan-300 hover:text-cyan-200 cursor-pointer"
+                  >
+                    সেটিংস দেখুন
+                  </button>
+                </div>
+              )}
+
+              {/* Stat Cards */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <span className="text-xs text-slate-400 font-medium">মোট অর্ডার</span>
+                    <span className="text-2xl font-black text-white font-mono mt-0.5 block">{toBn(totalOrders)}</span>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-slate-800 text-cyan-400 flex items-center justify-center">
+                    <Package className="w-5 h-5" />
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <span className="text-xs text-amber-300 font-medium">পেন্ডিং যাচাই</span>
+                    <span className="text-2xl font-black text-amber-400 font-mono mt-0.5 block">{toBn(pendingOrders)}</span>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center">
+                    <Clock className="w-5 h-5" />
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <span className="text-xs text-sky-300 font-medium">প্রসেসিং (লগইন/OTP)</span>
+                    <span className="text-2xl font-black text-sky-400 font-mono mt-0.5 block">{toBn(processingOrders)}</span>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-sky-500/10 text-sky-400 flex items-center justify-center">
+                    <Play className="w-5 h-5" />
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <span className="text-xs text-emerald-300 font-medium">মোট ডেলিভারি</span>
+                    <span className="text-2xl font-black text-emerald-400 font-mono mt-0.5 block">{toBn(completedOrders)}</span>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+                    <CheckCircle2 className="w-5 h-5" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Filters & Search Bar */}
+              <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-slate-900 p-3.5 rounded-2xl border border-slate-800">
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
+                  {(["all", "pending", "processing", "completed", "cancelled"] as const).map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => setFilterStatus(st)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer ${
+                        filterStatus === st
+                          ? "bg-cyan-500 text-black shadow-md shadow-cyan-500/20"
+                          : "bg-slate-800/80 text-slate-300 hover:text-white"
+                      }`}
+                    >
+                      {st === "all" && `সবগুলো (${toBn(orders.length)})`}
+                      {st === "pending" && `🟡 পেন্ডিং (${toBn(orders.filter(o => o.status === "pending").length)})`}
+                      {st === "processing" && `🔵 প্রসেসিং (${toBn(orders.filter(o => o.status === "processing").length)})`}
+                      {st === "completed" && `🟢 কমপ্লিট (${toBn(orders.filter(o => o.status === "completed").length)})`}
+                      {st === "cancelled" && `🔴 বাতিল (${toBn(orders.filter(o => o.status === "cancelled").length)})`}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="relative min-w-[240px]">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="অর্ডার নম্বর, ফোন বা TrxID..."
+                    className="w-full pl-9 pr-3 py-1.5 bg-slate-950 border border-slate-700/80 rounded-xl text-xs text-white focus:outline-none focus:border-cyan-400"
+                  />
+                </div>
+              </div>
+
+              {/* Automatic Notification Status Feedback Banner */}
+              {notificationFeedback && (
+                <div
+                  className={`p-3.5 rounded-2xl border flex flex-wrap items-center justify-between gap-3 text-xs ${
+                    notificationFeedback.type === "success"
+                      ? "bg-emerald-950/60 border-emerald-500/40 text-emerald-200"
+                      : notificationFeedback.type === "warning"
+                      ? "bg-amber-950/60 border-amber-500/40 text-amber-200"
+                      : "bg-rose-950/60 border-rose-500/40 text-rose-200"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <BellRing className="w-4 h-4 shrink-0 text-cyan-400" />
+                    <span>{notificationFeedback.text}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {notificationFeedback.orderNo && notificationFeedback.status && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const targetOrd = orders.find(
+                            (o) => o.orderNo === notificationFeedback.orderNo
+                          );
+                          if (targetOrd && notificationFeedback.status) {
+                            triggerAdminStatusNotification(
+                              targetOrd,
+                              notificationFeedback.status,
+                              true
+                            );
+                          }
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/40 text-cyan-200 font-bold cursor-pointer"
+                      >
+                        পুনরায় ইমেইল পাঠান (Force Retry)
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setNotificationFeedback(null)}
+                      className="px-2 py-1 rounded-lg bg-slate-900/80 text-slate-400 hover:text-white cursor-pointer"
+                    >
+                      বন্ধ করুন
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Order Cards Grid */}
+              {filteredOrders.length === 0 ? (
+                <div className="p-12 text-center rounded-2xl bg-slate-900 border border-slate-800 text-slate-400">
+                  <Package className="w-12 h-12 mx-auto text-slate-600 mb-3" />
+                  <p className="text-sm font-semibold">কোনো অর্ডার পাওয়া যায়নি।</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {filteredOrders.map((order) => {
+                    const normWhatsapp = formatBdWhatsappForUrl(order.otpWhatsapp || order.phone);
+                    const isPwdVisible = showPasswords[order.orderNo] || false;
+                    const isFbContact = order.contactMethod === "facebook";
+                    const isTgContact = order.contactMethod === "telegram";
+
+                    return (
+                      <div
+                        key={order.orderNo}
+                        className={`bg-slate-900 border rounded-2xl p-4 sm:p-5 space-y-4 hover:border-slate-700 transition flex flex-col justify-between ${
+                          order.status === "pending"
+                            ? "border-amber-500/40 shadow-lg shadow-amber-500/5"
+                            : order.status === "processing"
+                            ? "border-sky-500/40 shadow-lg shadow-sky-500/5"
+                            : "border-slate-800"
+                        }`}
+                      >
+                        <div>
+                          {/* Order Header */}
+                          <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono font-black text-base text-cyan-400">
+                                #{order.orderNo}
+                              </span>
+                              <button
+                                onClick={() => copyToClipboard(order.orderNo, `ord_${order.orderNo}`)}
+                                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+                                title="কপি করুন"
+                              >
+                                {copiedKey === `ord_${order.orderNo}` ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {notifyingOrders[order.orderNo] && (
+                                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 text-[10px] font-bold">
+                                  <RefreshCw className="w-3 h-3 animate-spin" />
+                                  নোটিফিকেশন যাচ্ছে...
+                                </span>
+                              )}
+                              <select
+                                aria-label={`Order status for ${order.orderNo}`}
+                                disabled={Boolean(notifyingOrders[order.orderNo])}
+                                value={order.status}
+                                onChange={(e) => handleStatusChange(order.orderNo, e.target.value as OrderStatus)}
+                                className={`text-xs font-bold px-3 py-1.5 rounded-xl border cursor-pointer focus:outline-none ${
+                                  order.status === "completed"
+                                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                                    : order.status === "processing"
+                                    ? "bg-sky-500/20 text-sky-300 border-sky-500/30"
+                                    : order.status === "cancelled"
+                                    ? "bg-rose-500/20 text-rose-300 border-rose-500/30"
+                                    : "bg-amber-500/20 text-amber-300 border-amber-500/30"
+                                }`}
+                              >
+                                <option value="pending" className="bg-slate-900 text-amber-300">🟡 Pending (পেন্ডিং)</option>
+                                <option value="processing" className="bg-slate-900 text-sky-300">🔵 Processing (প্রসেসিং)</option>
+                                <option value="completed" className="bg-slate-900 text-emerald-300">🟢 Completed (কমপ্লিটেড)</option>
+                                <option value="cancelled" className="bg-slate-900 text-rose-300">🔴 Cancelled (বাতিল)</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Status Update Timestamp & Notification Log Bar */}
+                          <div className="mt-2 px-3 py-2 rounded-xl bg-slate-950/90 border border-slate-800/90 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                            <span className="text-slate-400">
+                              সর্বশেষ আপডেট:{" "}
+                              <b className="text-slate-200">
+                                {new Date(order.statusUpdatedAt || order.time).toLocaleString("bn-BD", {
+                                  dateStyle: "short",
+                                  timeStyle: "short",
+                                })}
+                              </b>
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  triggerAdminStatusNotification(order, order.status, true)
+                                }
+                                disabled={Boolean(notifyingOrders[order.orderNo])}
+                                className="px-2 py-0.5 rounded bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 font-bold cursor-pointer"
+                                title="এই স্ট্যাটাসের ইমেইল নোটিফিকেশন পুনরায় পাঠান"
+                              >
+                                ↻ ইমেইল রিট্রাই
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedLogOrderNo(
+                                    expandedLogOrderNo === order.orderNo ? null : order.orderNo
+                                  )
+                                }
+                                className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 font-semibold cursor-pointer"
+                              >
+                                ইমেইল লগ ({toBn(getNotificationLogs(order.orderNo).length)})
+                              </button>
+                            </div>
+                          </div>
+
+                          {expandedLogOrderNo === order.orderNo && (
+                            <div className="mt-2 p-3 rounded-xl bg-slate-950 border border-cyan-500/30 space-y-2 text-[11px]">
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-cyan-300">
+                                  📧 নোটিফিকেশন লগ ও Idempotency রেকর্ড (#{order.orderNo})
+                                </span>
+                                <span className="text-[10px] text-slate-400">
+                                  Resend Server API
+                                </span>
+                              </div>
+                              {getNotificationLogs(order.orderNo).length === 0 ? (
+                                <p className="text-slate-500 text-xs">
+                                  এই অর্ডারের জন্য এখনো কোনো ইমেইল নোটিফিকেশন লগ নেই।
+                                </p>
+                              ) : (
+                                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                                  {getNotificationLogs(order.orderNo).map((log) => (
+                                    <div
+                                      key={log.id}
+                                      className="p-2 rounded-lg bg-slate-900 border border-slate-800 flex flex-col gap-1"
+                                    >
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="font-bold text-white">
+                                          {getOrderStatusLabelBn(log.orderStatus)} → {log.recipientEmail}
+                                        </span>
+                                        <span
+                                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                            log.deliveryStatus === "sent"
+                                              ? "bg-emerald-500/20 text-emerald-300"
+                                              : log.deliveryStatus === "skipped_duplicate"
+                                              ? "bg-amber-500/20 text-amber-300"
+                                              : "bg-rose-500/20 text-rose-300"
+                                          }`}
+                                        >
+                                          {log.deliveryStatus === "sent"
+                                            ? `Sent (${log.attempts}x)`
+                                            : log.deliveryStatus === "skipped_duplicate"
+                                            ? "Idempotent Skip"
+                                            : "Failed"}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                                        <span>Key: {log.idempotencyKey}</span>
+                                        <span>
+                                          {new Date(log.timestamp).toLocaleTimeString("bn-BD")}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Customer & Package Details */}
+                          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                            <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800">
+                              <span className="text-[11px] text-slate-400 block">গ্রাহকের নাম:</span>
+                              <span className="font-bold text-white text-sm mt-0.5 block">{order.name}</span>
+                            </div>
+
+                            <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800">
+                              <span className="text-[11px] text-slate-400 block">প্যাকেজ ও মূল্য:</span>
+                              <span className="font-bold text-emerald-400 text-sm mt-0.5 block">
+                                ৳ {toBn(order.price)} {order.coins ? `(${toBn(order.coins)} কয়েন)` : ""}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Contact Method & Channels */}
+                          <div className="mt-2 p-3 rounded-xl bg-slate-950/90 border border-slate-800 space-y-2">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-slate-400">মোবাইল:</span>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono text-white font-semibold">{formatBdPhonePretty(order.phone)}</span>
+                                <a
+                                  href={`tel:${order.phone}`}
+                                  className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-400"
+                                  title="সরাসরি কল দিন"
+                                >
+                                  <Phone className="w-3.5 h-3.5" />
+                                </a>
+                              </div>
+                            </div>
+
+                            {/* Contact Method Indicator (OTP & Communication) */}
+                            <div className="flex items-center justify-between text-xs pt-1.5 border-t border-slate-800/80 gap-2">
+                              <span className="text-slate-400 flex items-center gap-1 shrink-0">
+                                {isFbContact ? "🔵 FB (OTP যোগাযোগ):" : isTgContact ? "✈️ Telegram (OTP):" : "🟢 WhatsApp (OTP):"}
+                              </span>
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                {isFbContact ? (
+                                  order.contactHandle?.startsWith("http") ? (
+                                    <a
+                                      href={order.contactHandle}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-blue-400 hover:underline flex items-center gap-1 text-[11px] font-semibold truncate max-w-[140px]"
+                                    >
+                                      <span>ফেসবুক প্রোফাইল</span>
+                                      <ExternalLink className="w-3 h-3 shrink-0" />
+                                    </a>
+                                  ) : (
+                                    <span className="text-blue-300 font-mono text-[11px] truncate max-w-[140px]">{order.contactHandle || "FB Provided"}</span>
+                                  )
+                                ) : isTgContact ? (
+                                  <span className="text-sky-300 font-mono text-[11px] truncate max-w-[140px]">{order.contactHandle}</span>
+                                ) : (
+                                  <span className="font-mono text-emerald-300 font-semibold">{order.otpWhatsapp || order.phone}</span>
+                                )}
+
+                                <button
+                                  onClick={() =>
+                                    copyToClipboard(
+                                      isFbContact || isTgContact ? (order.contactHandle || order.phone) : (order.otpWhatsapp || order.phone),
+                                      `contact-${order.orderNo}`
+                                    )
+                                  }
+                                  className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer shrink-0"
+                                  title="কন্টাক্ট কপি করুন"
+                                >
+                                  {copiedKey === `contact-${order.orderNo}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                                </button>
+
+                                <button
+                                  onClick={() => setChatModalOrder(order)}
+                                  className="p-1 rounded bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-[11px] font-bold flex items-center gap-1 shrink-0"
+                                  title="ওয়েবসাইটে লাইভ চ্যাট করুন"
+                                >
+                                  <Headphones className="w-3 h-3" />
+                                  <span>লাইভ চ্যাট</span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Konami Account Credentials OR Payment Link Info */}
+                          {order.serviceMethod === "payment_link" ? (
+                            <div className="mt-2 p-3 rounded-xl bg-amber-950/30 border border-amber-500/30 space-y-2 text-xs">
+                              <div className="flex items-center justify-between">
+                                <span className="text-amber-300 font-bold">🔗 সার্ভিস ধরন:</span>
+                                <span className="px-2 py-0.5 rounded-full bg-amber-400 text-black font-black text-[10px]">
+                                  আইডি পাসওয়ার্ড ছাড়া (পেমেন্ট লিংক)
+                                </span>
+                              </div>
+
+                              <div className="flex items-center justify-between pt-1 border-t border-amber-500/20 gap-2">
+                                <span className="text-amber-200 font-medium shrink-0">জাপান পেমেন্ট লিংক:</span>
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className="font-mono font-bold text-white bg-slate-950 px-2 py-0.5 rounded border border-slate-800 truncate max-w-[180px]">
+                                    {order.paymentLinkJapan || "N/A"}
+                                  </span>
+                                  {order.paymentLinkJapan && (
+                                    <button
+                                      onClick={() => copyToClipboard(order.paymentLinkJapan!, `plink_${order.orderNo}`)}
+                                      className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white shrink-0"
+                                      title="লিংক কপি করুন"
+                                    >
+                                      {copiedKey === `plink_${order.orderNo}` ? (
+                                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                      ) : (
+                                        <Copy className="w-3.5 h-3.5" />
+                                      )}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-between pt-1 border-t border-amber-500/20">
+                                <span className="text-amber-200 font-medium">পেমেন্ট লিংক Gmail:</span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-mono font-bold text-cyan-300 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                                    {order.paymentLinkGmail || order.konamiIdOrEmail}
+                                  </span>
+                                  <button
+                                    onClick={() => copyToClipboard(order.paymentLinkGmail || order.konamiIdOrEmail, `id_${order.orderNo}`)}
+                                    className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+                                    title="কপি করুন"
+                                  >
+                                    {copiedKey === `id_${order.orderNo}` ? (
+                                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                    ) : (
+                                      <Copy className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="mt-2 p-3 rounded-xl bg-cyan-950/30 border border-cyan-500/20 space-y-2 text-xs">
+                              <div className="flex items-center justify-between">
+                                <span className="text-cyan-300 font-medium">Konami ID / Gmail:</span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-mono font-bold text-white bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                                    {order.konamiIdOrEmail}
+                                  </span>
+                                  <button
+                                    onClick={() => copyToClipboard(order.konamiIdOrEmail, `id_${order.orderNo}`)}
+                                    className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+                                    title="কপি করুন"
+                                  >
+                                    {copiedKey === `id_${order.orderNo}` ? (
+                                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                    ) : (
+                                      <Copy className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center justify-between pt-1 border-t border-cyan-500/20">
+                                <span className="text-cyan-300 font-medium">Konami পাসওয়ার্ড:</span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-mono font-bold text-amber-300 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
+                                    {isPwdVisible ? order.konamiPassword : "••••••••••••"}
+                                  </span>
+                                  <button
+                                    onClick={() => togglePasswordVisibility(order.orderNo)}
+                                    className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+                                    title={isPwdVisible ? "লুকান" : "দেখুন"}
+                                  >
+                                    {isPwdVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                  </button>
+                                  <button
+                                    onClick={() => copyToClipboard(order.konamiPassword, `pwd_${order.orderNo}`)}
+                                    className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+                                    title="কপি করুন"
+                                  >
+                                    {copiedKey === `pwd_${order.orderNo}` ? (
+                                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                    ) : (
+                                      <Copy className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Payment Details */}
+                          <div className="mt-2 p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 text-xs flex items-center justify-between gap-2">
+                            {order.paymentSource === "shop" ? (
+                              <span className="text-amber-300 font-bold">
+                                🏪 {order.paymentMethod} — দোকান থেকে (লাস্ট ডিজিট: <span className="font-mono text-white underline">{order.shopLastDigits || order.senderNumber}</span>)
+                              </span>
+                            ) : order.paymentSource === "bank" ? (
+                              <span className="text-cyan-300 font-bold">
+                                🏦 {order.paymentMethod} — প্রেরক একাউন্ট: <span className="font-mono text-white underline">{order.senderBankAccountName || order.senderNumber}</span>
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">
+                                📱 {order.paymentMethod} (প্রেরক: <span className="text-white font-mono">{order.senderNumber}</span>)
+                              </span>
+                            )}
+                            <div className="flex items-center gap-1 shrink-0">
+                              <span className="font-mono text-amber-400 font-bold">
+                                {order.paymentSource === "shop" && order.shopLastDigits
+                                  ? `শেষ ডিজিট: ${order.shopLastDigits}`
+                                  : order.trxId}
+                              </span>
+                              <button
+                                onClick={() =>
+                                  copyToClipboard(
+                                    order.paymentSource === "shop" && order.shopLastDigits
+                                      ? order.shopLastDigits
+                                      : order.trxId,
+                                    `trx_${order.orderNo}`
+                                  )
+                                }
+                                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+                                title="কপি করুন"
+                              >
+                                {copiedKey === `trx_${order.orderNo}` ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Customer Note / Description if entered */}
+                          {order.customerNote && (
+                            <div className="mt-2 p-2.5 rounded-xl bg-indigo-950/40 border border-indigo-500/30 text-xs text-indigo-200">
+                              <span className="font-bold text-indigo-300 block mb-0.5">📝 কাস্টমার চাহিদা / নোট:</span>
+                              <p className="italic">"{order.customerNote}"</p>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* ORDER PROGRESSION PIPELINE CONTROLS */}
+                        <div className="space-y-2.5 pt-3 border-t border-slate-800">
+                          {/* 4-Step Visual Progress Bar */}
+                          <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                              অর্ডার ডেলিভারি পাইপলাইন:
+                            </span>
+
+                            {/* Step Buttons */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                              {/* STEP 1: CONFIRM PAYMENT */}
+                              {order.status === "pending" ? (
+                                <button
+                                  onClick={() => handleConfirmPayment(order)}
+                                  className="w-full py-2 px-3 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-black font-extrabold flex items-center justify-center gap-1.5 transition cursor-pointer shadow-md"
+                                >
+                                  <Check className="w-4 h-4" />
+                                  <span>১. পেমেন্ট কনফার্ম করুন</span>
+                                </button>
+                              ) : (
+                                <div className="py-1.5 px-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-bold flex items-center gap-1.5 text-[11px]">
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                  <span>১. পেমেন্ট কনফার্মড ✅</span>
+                                </div>
+                              )}
+
+                              {/* STEP 2: START BUTTON (LOGIN START NOTICE) */}
+                              <button
+                                onClick={() => handleStartLogin(order)}
+                                className={`py-2 px-3 rounded-xl font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                                  order.loginStartSent
+                                    ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
+                                    : "bg-sky-500 hover:bg-sky-400 text-black shadow-md shadow-sky-500/20"
+                                }`}
+                              >
+                                <Play className="w-3.5 h-3.5" />
+                                <span>২. Start (লগইন মেসেজ)</span>
+                              </button>
+                            </div>
+
+                            {/* Step 2 Confirmation check & Step 3: Request OTP */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1">
+                              {/* Confirm user is active */}
+                              <button
+                                onClick={() => handleToggleUserActiveConfirmed(order)}
+                                className={`py-1.5 px-3 rounded-xl font-semibold flex items-center justify-between border cursor-pointer ${
+                                  order.userActiveConfirmed
+                                    ? "bg-emerald-950/50 border-emerald-500/40 text-emerald-300"
+                                    : "bg-slate-900 border-slate-700 text-slate-400 hover:text-white"
+                                }`}
+                              >
+                                <span>ইউজার এক্টিভ নিশ্চিত?</span>
+                                <span>{order.userActiveConfirmed ? "✅ হ্যাঁ, আছি" : "❌ অপেক্ষা"}</span>
+                              </button>
+
+                              {/* STEP 3: OTP REQUEST MESSAGE */}
+                              <button
+                                onClick={() => handleRequestOtp(order)}
+                                className={`py-2 px-3 rounded-xl font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+                                  order.otpRequested
+                                    ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                                    : "bg-gradient-to-r from-cyan-500 to-teal-400 text-black shadow-md shadow-cyan-500/20"
+                                }`}
+                              >
+                                <KeyRound className="w-3.5 h-3.5" />
+                                <span>৩. OTP চান (৫ মিনিট)</span>
+                              </button>
+                            </div>
+
+                            {/* STEP 4: ORDER COMPLETED BUTTON */}
+                            <button
+                              onClick={() => handleCompleteOrder(order)}
+                              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-black font-black text-xs transition cursor-pointer shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2"
+                            >
+                              <CheckCircle2 className="w-4 h-4" />
+                              <span>৪. অর্ডার কমপ্লিট ও ডিজিটাল রশিদ পাঠান</span>
+                            </button>
+                          </div>
+
+                          {/* Quick Secondary Actions */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs">
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => handleWrongPasswordNotice(order)}
+                                className="inline-flex items-center gap-1 text-amber-400 hover:text-amber-300 cursor-pointer"
+                              >
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                <span>ভুল পাসওয়ার্ড নোটিশ</span>
+                              </button>
+
+                              <button
+                                onClick={() => handleMarkFakeOrStrike(order)}
+                                className="inline-flex items-center gap-1 text-rose-400 hover:text-rose-300 cursor-pointer"
+                                title="৩ বার ভুল দিলে অটো ব্লক হবে"
+                              >
+                                <Ban className="w-3.5 h-3.5" />
+                                <span>+১ স্ট্রাইক</span>
+                              </button>
+                            </div>
+
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => onViewReceipt(order)}
+                                className="inline-flex items-center gap-1 text-cyan-400 hover:text-white cursor-pointer"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                <span>রিসিপ্ট</span>
+                              </button>
+
+                              <button
+                                onClick={() => handleDelete(order.orderNo)}
+                                className="inline-flex items-center gap-1 text-rose-400 hover:text-rose-300 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>মুছুন</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 2: LIVE CHAT */}
+          {activeTab === "chat" && (
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col md:flex-row h-[650px] shadow-2xl">
+              {/* Left Conversations List */}
+              <div className="w-full md:w-80 border-r border-slate-800 flex flex-col bg-slate-950/80">
+                <div className="p-3.5 border-b border-slate-800">
+                  <h3 className="font-bold text-white text-sm flex items-center justify-between">
+                    <span>কাস্টমার চ্যাট তালিকা</span>
+                    <span className="text-xs text-cyan-400 font-mono">
+                      {toBn(chatConversations.length)} টি
+                    </span>
+                  </h3>
+                </div>
+
+                <div className="flex-1 overflow-y-auto divide-y divide-slate-850">
+                  {chatConversations.length === 0 ? (
+                    <div className="p-8 text-center text-slate-500 text-xs">
+                      কোনো কথোপকথন নেই
+                    </div>
+                  ) : (
+                    chatConversations.map((c) => (
+                      <button
+                        key={c.phone}
+                        onClick={() => {
+                          setActiveChatPhone(c.phone);
+                          setActiveChatMessages(getLiveChatMessages(c.phone));
+                          markChatAsRead(c.phone);
+                        }}
+                        className={`w-full p-3 text-left transition flex items-start gap-3 cursor-pointer ${
+                          activeChatPhone === c.phone
+                            ? "bg-cyan-500/10 border-l-4 border-cyan-400"
+                            : "hover:bg-slate-900"
+                        }`}
+                      >
+                        <div className="w-9 h-9 rounded-xl bg-slate-800 text-cyan-400 flex items-center justify-center font-bold text-sm shrink-0">
+                          {c.name.charAt(0) || "U"}
+                        </div>
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="font-bold text-white text-xs truncate">{c.name}</span>
+                            <span className="text-[10px] text-slate-400">{c.lastMessage.time}</span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 font-mono">{formatBdPhonePretty(c.phone)}</p>
+                          <p className="text-xs text-slate-300 truncate mt-0.5">{c.lastMessage.text}</p>
+                        </div>
+
+                        {c.unreadCount > 0 && (
+                          <span className="px-1.5 py-0.5 rounded-full bg-emerald-400 text-black text-[10px] font-black shrink-0">
+                            {toBn(c.unreadCount)}
+                          </span>
+                        )}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Right Chat Panel */}
+              <div className="flex-1 flex flex-col bg-[#070e1e]">
+                {activeChatPhone ? (
+                  <>
+                    {/* Header */}
+                    <div className="p-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-cyan-500/20 text-cyan-300 flex items-center justify-center font-bold">
+                          <Headphones className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-white text-sm">
+                            {chatConversations.find(c => c.phone === activeChatPhone)?.name || "কাস্টমার"}
+                          </h4>
+                          <p className="text-xs text-slate-400 font-mono">
+                            {formatBdPhonePretty(activeChatPhone)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <a
+                        href={`https://wa.me/${formatBdWhatsappForUrl(activeChatPhone)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-3 py-1.5 rounded-xl bg-emerald-500 text-black text-xs font-bold flex items-center gap-1.5"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" />
+                        <span>WhatsApp এ যান</span>
+                      </a>
+                    </div>
+
+                    {/* Messages */}
+                    <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                      {activeChatMessages.map((m) => {
+                        const isMe = m.sender === "admin";
+                        return (
+                          <div
+                            key={m.id}
+                            className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
+                          >
+                            <span className="text-[10px] text-slate-400 mb-0.5 px-1">
+                              {isMe ? "🛡️ আপনি (এডমিন)" : `👤 ${m.customerName}`} • {m.time}
+                            </span>
+                            <div
+                              className={`max-w-[80%] rounded-2xl px-4 py-2 text-xs sm:text-sm leading-relaxed shadow ${
+                                isMe
+                                  ? "bg-gradient-to-r from-cyan-500 to-emerald-500 text-black font-medium rounded-tr-none"
+                                  : "bg-slate-800 border border-slate-700 text-white rounded-tl-none"
+                              }`}
+                            >
+                              {m.text}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Quick Shortcuts */}
+                    <div className="px-3 py-1.5 bg-slate-950/80 border-t border-slate-800 flex items-center gap-1.5 overflow-x-auto">
+                      {[
+                        "আসসালামু আলাইকুম! আপনার আইডি লগইন করা হচ্ছে, আপনি কি একটিভ আছেন?",
+                        "আপনার জিমেইলে OTP পাঠানো হয়েছে, দয়া করে দিন। (মেয়াদ ৫ মিনিট)",
+                        "আলহামদুলিল্লাহ আপনার কয়েন সফলভাবে যোগ করে দেওয়া হয়েছে!",
+                        "আপনার পেমেন্ট পেয়েছি, ২ মিনিটে কাজ শুরু হচ্ছে।"
+                      ].map((chip, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => setChatInputText(chip)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[11px] text-cyan-300 whitespace-nowrap transition cursor-pointer"
+                        >
+                          {chip}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Chat Input */}
+                    <form onSubmit={handleAdminSendChat} className="p-3 bg-slate-950 border-t border-slate-800 flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={chatInputText}
+                        onChange={(e) => setChatInputText(e.target.value)}
+                        placeholder="কাস্টমারকে উত্তর দিন..."
+                        className="flex-1 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs sm:text-sm focus:outline-none focus:border-cyan-400"
+                      />
+                      <button
+                        type="submit"
+                        disabled={!chatInputText.trim()}
+                        className="p-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 text-black transition cursor-pointer"
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                    </form>
+                  </>
+                ) : (
+                  <div className="flex-1 flex items-center justify-center p-8 text-center text-slate-500 text-sm">
+                    বাম পাশ থেকে যেকোনো কথোপকথন সিলেক্ট করুন
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: CUSTOMERS & USER ACCOUNTS (FULL ADMIN ACCESS) */}
+          {activeTab === "customers" && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-extrabold text-white flex items-center gap-2">
+                    <Users className="w-5 h-5 text-cyan-400" />
+                    <span>ইউজার অ্যাকাউন্টস ও কাস্টমার কন্ট্রোল প্যানেল (Full Admin Access)</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    যেকোনো ইউজার পাসওয়ার্ড ভুলে গেলে বা সমস্যায় পড়লে এখান থেকে তার ইউজারনেম, ইমেইল, পাসওয়ার্ড দেখা, পরিবর্তন ও সব অর্ডার রিপোর্ট ম্যানেজ করুন
+                  </p>
+                </div>
+              </div>
+
+              {userAdminMsg && (
+                <div className="p-3.5 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-2">
+                  <Check className="w-4 h-4 text-emerald-400" />
+                  <span>{userAdminMsg}</span>
+                </div>
+              )}
+
+              {/* Edit User Account Modal / Box if Admin clicked Edit */}
+              {editingUser && (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    updateRegisteredUser(editingUser.id, {
+                      name: editingUser.name.trim(),
+                      username: editingUser.username.trim().toLowerCase(),
+                      email: editingUser.email.trim().toLowerCase(),
+                      phone: convertBnToEnDigits(editingUser.phone.trim()),
+                      password: editingUser.password.trim(),
+                      emailVerified: editingUser.emailVerified,
+                    });
+                    setEditingUser(null);
+                    loadData();
+                    setUserAdminMsg("✅ ইউজারের অ্যাকাউন্ট তথ্য ও পাসওয়ার্ড সফলভাবে আপডেট করা হয়েছে!");
+                    setTimeout(() => setUserAdminMsg(""), 4000);
+                  }}
+                  className="p-5 rounded-2xl bg-slate-900 border-2 border-cyan-500/50 space-y-4 shadow-2xl"
+                >
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <h4 className="text-sm font-extrabold text-cyan-300">
+                      🔑 ইউজার অ্যাকাউন্ট ও পাসওয়ার্ড এডিট করুন (@{editingUser.username})
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => setEditingUser(null)}
+                      className="text-xs text-slate-400 hover:text-white cursor-pointer"
+                    >
+                      ✕ বন্ধ করুন
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">নাম</label>
+                      <input
+                        type="text"
+                        value={editingUser.name}
+                        onChange={(e) => setEditingUser({ ...editingUser, name: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">ইউজারনেম</label>
+                      <input
+                        type="text"
+                        required
+                        value={editingUser.username}
+                        onChange={(e) => setEditingUser({ ...editingUser, username: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-amber-300 mb-1">
+                        পাসওয়ার্ড (রিসেট / পরিবর্তন) *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={editingUser.password}
+                        onChange={(e) => setEditingUser({ ...editingUser, password: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-950 border border-amber-500/50 rounded-xl text-amber-300 font-mono font-bold text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">ইমেইল অ্যাড্রেস</label>
+                      <input
+                        type="email"
+                        value={editingUser.email}
+                        onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-300 mb-1">মোবাইল নম্বর</label>
+                      <input
+                        type="tel"
+                        value={editingUser.phone}
+                        onChange={(e) => setEditingUser({ ...editingUser, phone: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-xs"
+                      />
+                    </div>
+                    <label className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-emerald-300 font-bold cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editingUser.emailVerified}
+                        onChange={(e) =>
+                          setEditingUser({ ...editingUser, emailVerified: e.target.checked })
+                        }
+                        className="w-4 h-4 accent-emerald-500 rounded"
+                      />
+                      <span>ইমেইল ভেরিফাইড (Verified)</span>
+                    </label>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setEditingUser(null)}
+                      className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold cursor-pointer"
+                    >
+                      বাতিল
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-black font-extrabold text-xs cursor-pointer"
+                    >
+                      ইউজার আপডেট সেভ করুন
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-950 border-b border-slate-800 text-slate-400 font-semibold uppercase tracking-wider">
+                      <tr>
+                        <th className="p-3.5">কাস্টমার / ইউজারনেম</th>
+                        <th className="p-3.5">ইমেইল ও মোবাইল</th>
+                        <th className="p-3.5">পাসওয়ার্ড (Admin Access)</th>
+                        <th className="p-3.5">অর্ডার (মোট / কমপ্লিট / বাতিল)</th>
+                        <th className="p-3.5">মোট খরচ</th>
+                        <th className="p-3.5 text-right">অ্যাকশন</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80">
+                      {customers.map((c, idx) => {
+                        const rowKey = c.id || c.phone || String(idx);
+                        const isPassShown = !!showUserPassMap[rowKey];
+                        return (
+                          <tr key={rowKey} className="hover:bg-slate-850 transition">
+                            <td className="p-3.5">
+                              <div className="font-bold text-white flex items-center gap-1.5">
+                                <span>{c.name}</span>
+                                {c.emailVerified && (
+                                  <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 text-[10px]">
+                                    Verified
+                                  </span>
+                                )}
+                                {c.googleConnected && (
+                                  <span className="px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-300 text-[10px]">
+                                    Google
+                                  </span>
+                                )}
+                                {c.isBlocked && (
+                                  <span className="px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300 text-[10px]">
+                                    ব্লকড
+                                  </span>
+                                )}
+                              </div>
+                              {c.username ? (
+                                <span className="text-[11px] font-mono text-cyan-400 block mt-0.5">
+                                  @{c.username}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-500 block mt-0.5">
+                                  গেস্ট অর্ডার (অ্যাকাউন্ট নেই)
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="p-3.5">
+                              {c.email && (
+                                <div className="text-slate-200 font-mono text-[11px]">{c.email}</div>
+                              )}
+                              <div className="font-mono text-cyan-400 text-[11px]">
+                                {c.phone ? formatBdPhonePretty(c.phone) : "N/A"}
+                              </div>
+                            </td>
+
+                            <td className="p-3.5">
+                              {c.password ? (
+                                <div className="flex items-center gap-1.5">
+                                  <code className="px-2 py-1 rounded bg-slate-950 border border-slate-800 font-mono text-amber-300 text-xs">
+                                    {isPassShown ? c.password : "••••••"}
+                                  </code>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setShowUserPassMap((prev) => ({
+                                        ...prev,
+                                        [rowKey]: !prev[rowKey],
+                                      }))
+                                    }
+                                    className="p-1 text-slate-400 hover:text-white cursor-pointer"
+                                    title="পাসওয়ার্ড দেখুন"
+                                  >
+                                    {isPassShown ? (
+                                      <EyeOff className="w-3.5 h-3.5" />
+                                    ) : (
+                                      <Eye className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      copyToClipboard(
+                                        `ইউজারনেম: ${c.username || c.email}\nপাসওয়ার্ড: ${c.password}`,
+                                        `upass_${rowKey}`
+                                      )
+                                    }
+                                    className="p-1 text-cyan-400 hover:text-cyan-300 cursor-pointer"
+                                    title="ইউজারনেম ও পাসওয়ার্ড কপি করুন"
+                                  >
+                                    {copiedKey === `upass_${rowKey}` ? (
+                                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                    ) : (
+                                      <Copy className="w-3.5 h-3.5" />
+                                    )}
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-slate-500 text-[11px]">—</span>
+                              )}
+                            </td>
+
+                            <td className="p-3.5 font-mono">
+                              <span className="text-white font-bold">{toBn(c.totalOrders)} টি</span>{" "}
+                              <span className="text-slate-400 text-[11px]">
+                                (🟢 {toBn(c.completedOrders)} • 🔴 {toBn(c.cancelledOrders)})
+                              </span>
+                            </td>
+
+                            <td className="p-3.5 font-mono font-bold text-emerald-400">
+                              ৳ {toBn(c.totalSpent)}
+                            </td>
+
+                            <td className="p-3.5 text-right">
+                              <div className="inline-flex items-center gap-1.5">
+                                {c.id && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setEditingUser({
+                                        id: c.id!,
+                                        name: c.name || "",
+                                        username: c.username || "",
+                                        email: c.email || "",
+                                        phone: c.phone || "",
+                                        password: c.password || "",
+                                        emailVerified: !!c.emailVerified,
+                                      })
+                                    }
+                                    className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-bold cursor-pointer border border-amber-500/30"
+                                  >
+                                    পাসওয়ার্ড / এডিট
+                                  </button>
+                                )}
+                                {c.phone && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setActiveChatPhone(c.phone);
+                                      setActiveTab("chat");
+                                    }}
+                                    className="px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 font-semibold cursor-pointer border border-cyan-500/30"
+                                  >
+                                    চ্যাট
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: PASSWORD & SECURITY CREDENTIALS */}
+          {activeTab === "security" && (
+            <div className="max-w-2xl mx-auto space-y-6">
+              <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+                <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
+                  <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center justify-center">
+                    <KeyRound className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-white">অ্যাডমিন পাসওয়ার্ড ও সিকিউরিটি পরিবর্তন</h3>
+                    <p className="text-xs text-slate-400">সিকিউরিটি ইমেইল ও পাসওয়ার্ড ভেরিফাই করে পিন পরিবর্তন করুন</p>
+                  </div>
+                </div>
+
+                {!isSecUnlocked ? (
+                  <form onSubmit={handleVerifySecurity} className="space-y-4 pt-2">
+                    <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs">
+                      🔒 অ্যাডমিন পিন পরিবর্তন করতে প্রথমে আপনার সিকিউরিটি ইমেইল ও সিকিউরিটি পাসওয়ার্ড দিয়ে আনলক করুন।
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        সিকিউরিটি ইমেইল (Security Email)
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        value={verifyEmail}
+                        onChange={(e) => setVerifyEmail(e.target.value)}
+                        placeholder="আপনার সিকিউরিটি ইমেইল লিখুন..."
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        সিকিউরিটি পাসওয়ার্ড (Security Password)
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        value={verifyPassword}
+                        onChange={(e) => setVerifyPassword(e.target.value)}
+                        placeholder="সিকিউরিটি পাসওয়ার্ড দিন..."
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+
+                    {secVerifyError && (
+                      <p className="text-xs text-rose-400 bg-rose-500/10 py-1.5 px-3 rounded-lg border border-rose-500/20">
+                        {secVerifyError}
+                      </p>
+                    )}
+
+                    <button
+                      type="submit"
+                      className="w-full py-3 bg-cyan-500 hover:bg-cyan-400 text-black font-extrabold text-xs rounded-xl transition cursor-pointer"
+                    >
+                      যাচাই করুন ও আনলক করুন
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleSaveSecurity} className="space-y-4 pt-2">
+                    {secSuccessMsg && (
+                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+                        <Check className="w-4 h-4 text-emerald-400" />
+                        <span>{secSuccessMsg}</span>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-300 mb-1">
+                          নতুন অ্যাডমিন পিন (New Admin PIN)
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={newAdminPin}
+                          onChange={(e) => setNewAdminPin(e.target.value)}
+                          placeholder="যেমন: 2026"
+                          className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-300 mb-1">
+                          পিন পুনরায় নিশ্চিত করুন (Confirm PIN)
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={confirmNewAdminPin}
+                          onChange={(e) => setConfirmNewAdminPin(e.target.value)}
+                          placeholder="পুনরায় নতুন পিন লিখুন"
+                          className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-cyan-400"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-800">
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        সিকিউরিটি ইমেইল আপডেট
+                      </label>
+                      <input
+                        type="email"
+                        value={newSecEmail}
+                        onChange={(e) => setNewSecEmail(e.target.value)}
+                        placeholder="shuaivehasanfahim@gmail.com"
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        নতুন সিকিউরিটি পাসওয়ার্ড
+                      </label>
+                      <input
+                        type="text"
+                        value={newSecPassword}
+                        onChange={(e) => setNewSecPassword(e.target.value)}
+                        placeholder="NextGen2026@Secure"
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full py-3 bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black font-extrabold text-xs rounded-xl transition cursor-pointer shadow-lg shadow-cyan-500/20"
+                    >
+                      পাসওয়ার্ড ও সিকিউরিটি সংরক্ষণ করুন
+                    </button>
+                  </form>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 5: SHOP & PAYMENT SETTINGS */}
+          {activeTab === "settings" && (
+            <div className="max-w-2xl mx-auto space-y-6">
+              <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+                <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
+                  <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center justify-center">
+                    <Settings className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-white">শপ ও পেমেন্ট কনফিগারেশন</h3>
+                    <p className="text-xs text-slate-400">বিকাশ, নগদ, ফেসবুক পেজ ও ঘোষণা ব্যানার পরিবর্তন করুন</p>
+                  </div>
+                </div>
+
+                {settingsSuccessMsg && (
+                  <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+                    <Check className="w-4 h-4 text-emerald-400" />
+                    <span>{settingsSuccessMsg}</span>
+                  </div>
+                )}
+
+                <form onSubmit={handleSaveShopSettings} className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        bKash পার্সোনাল নম্বর (Send Money)
+                      </label>
+                      <input
+                        type="tel"
+                        required
+                        value={shopSettings.bkashNumber}
+                        onChange={(e) => setShopSettingsState({ ...shopSettings, bkashNumber: e.target.value })}
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        Nagad পার্সোনাল নম্বর (Send Money)
+                      </label>
+                      <input
+                        type="tel"
+                        required
+                        value={shopSettings.nagadNumber}
+                        onChange={(e) => setShopSettingsState({ ...shopSettings, nagadNumber: e.target.value })}
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      অফিসিয়াল ফেসবুক পেজ লিংক (Facebook Review & Invite Link)
+                    </label>
+                    <input
+                      type="url"
+                      required
+                      value={shopSettings.facebookUrl}
+                      onChange={(e) => setShopSettingsState({ ...shopSettings, facebookUrl: e.target.value })}
+                      placeholder="https://facebook.com/nextgenefootball01"
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      হোমপেজ টপ নোটিশ ও ঘোষণা ব্যানার
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={shopSettings.noticeText}
+                      onChange={(e) => setShopSettingsState({ ...shopSettings, noticeText: e.target.value })}
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                    />
+                  </div>
+
+                  {/* AUTOMATIC ADMIN WHATSAPP NOTIFICATION BOT SETUP */}
+                  <div className="p-4 rounded-2xl bg-emerald-950/30 border-2 border-emerald-500/40 space-y-3.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <h4 className="text-sm font-extrabold text-emerald-300 flex items-center gap-1.5">
+                          <MessageCircle className="w-4 h-4 text-emerald-400" />
+                          <span>অটোমেটিক WhatsApp অর্ডার মেসেজ (কাস্টমারের WhatsApp ছাড়াই)</span>
+                        </h4>
+                        <p className="text-[11px] text-slate-300 mt-0.5">
+                          অনেক কাস্টমারের ফোনে WhatsApp থাকে না। তাই ওয়েবসাইটে কেউ অর্ডার করলেই যাতে স্বয়ংক্রিয়ভাবে আপনার নিজের WhatsApp-এ অর্ডারের মেসেজ চলে আসে, সেটির জন্য নিচের বটটি চালু করুন:
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-slate-950/90 border border-slate-800 text-xs space-y-2 text-slate-200">
+                      <p className="font-bold text-amber-300">⚡ কীভাবে ১ মিনিটে ফ্রি অটো-WhatsApp চালু করবেন:</p>
+                      <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-300">
+                        <li>
+                          নিচের <b>"১ ক্লিকে ফ্রি API Key নিন"</b> বাটনে চাপ দিয়ে আপনার নিজের WhatsApp থেকে বটকে মেসেজটি পাঠান।
+                        </li>
+                        <li>
+                          সাথে সাথে বট আপনাকে রিপ্লাইতে একটি <b>API Key</b> (যেমন: <code>123456</code>) দিবে।
+                        </li>
+                        <li>
+                          সেই API Key নিচের ঘরে বসিয়ে <b>"সেটিংস সেভ করুন"</b> চাপুন — ব্যস! এরপর যেকোনো অর্ডার আসলেই আপনার WhatsApp-এ অটো মেসেজ যাবে।
+                        </li>
+                      </ol>
+                      <div className="pt-1">
+                        <a
+                          href="https://wa.me/34644519523?text=I%20allow%20callmebot%20to%20send%20me%20messages"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs transition cursor-pointer shadow-md"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>১ ক্লিকে ফ্রি API Key নিন (WhatsApp Bot)</span>
+                        </a>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-emerald-200 mb-1">
+                          আপনার যে WhatsApp নম্বরে অটো মেসেজ যাবে
+                        </label>
+                        <input
+                          type="tel"
+                          value={shopSettings.autoWhatsappPhone || shopSettings.whatsapp || "01629802989"}
+                          onChange={(e) =>
+                            setShopSettingsState({ ...shopSettings, autoWhatsappPhone: e.target.value })
+                          }
+                          placeholder="01629802989"
+                          className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-xs focus:outline-none focus:border-emerald-400"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-emerald-200 mb-1">
+                          WhatsApp Bot API Key (CallMeBot)
+                        </label>
+                        <input
+                          type="text"
+                          value={shopSettings.callmebotApiKey || ""}
+                          onChange={(e) =>
+                            setShopSettingsState({ ...shopSettings, callmebotApiKey: e.target.value })
+                          }
+                          placeholder="বট থেকে পাওয়া API Key লিখুন..."
+                          className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-emerald-300 font-mono text-xs focus:outline-none focus:border-emerald-400"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                        কাস্টম WhatsApp Webhook URL (ঐচ্ছিক - যদি অন্য কোনো গেটওয়ে ব্যবহার করেন)
+                      </label>
+                      <input
+                        type="url"
+                        value={shopSettings.whatsappWebhookUrl || ""}
+                        onChange={(e) =>
+                          setShopSettingsState({ ...shopSettings, whatsappWebhookUrl: e.target.value })
+                        }
+                        placeholder="https://..."
+                        className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-300 font-mono text-xs focus:outline-none focus:border-emerald-400"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                      <span className="text-[11px] text-slate-400">
+                        📧 এছাড়াও প্রতিটি অর্ডারের সাথে সাথে আপনার জিমেইলে ({secConfig.securityEmail}) অটোমেটিক নোটিফিকেশন যাবে।
+                      </span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          updateShopSettings(shopSettings);
+                          const ok = await sendTestAutoWhatsappAlert(
+                            shopSettings.autoWhatsappPhone || shopSettings.whatsapp,
+                            shopSettings.callmebotApiKey || "",
+                            shopSettings.whatsappWebhookUrl
+                          );
+                          if (ok) {
+                            setSettingsSuccessMsg(
+                              "✅ সেটিংস সেভ হয়েছে এবং আপনার WhatsApp নম্বরে একটি টেস্ট অটো-মেসেজ পাঠানো হয়েছে!"
+                            );
+                          } else {
+                            setSettingsSuccessMsg(
+                              "⚠️ আগে উপরের সবুজ বাটনে চাপ দিয়ে ফ্রি API Key নিয়ে ঘরে বসান, তারপর টেস্ট মেসেজ পাঠান।"
+                            );
+                          }
+                          setTimeout(() => setSettingsSuccessMsg(""), 5000);
+                        }}
+                        className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-emerald-500/40 text-emerald-300 font-bold text-xs cursor-pointer transition"
+                      >
+                        🔔 সেভ ও টেস্ট মেসেজ পাঠান
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full py-3 bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black font-extrabold text-xs rounded-xl transition cursor-pointer shadow-lg shadow-cyan-500/20"
+                  >
+                    সেটিংস সেভ করুন
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 6: FRAUD & BLOCK LIST */}
+          {activeTab === "fraud" && (
+            <div className="max-w-3xl mx-auto space-y-6">
+              <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
+                <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
+                  <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-400 flex items-center justify-center">
+                    <ShieldAlert className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-white">ফ্রড প্রতিরোধ ও ৩-স্ট্রাইক ব্লক সিস্টেম</h3>
+                    <p className="text-xs text-slate-400">যে কোনো নম্বর ৩ বার ভুল তথ্য দিলে স্বয়ংক্রিয়ভাবে ব্লক হয়ে যায়</p>
+                  </div>
+                </div>
+
+                {/* Manual Block Form */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!manualBlockPhone) return;
+                    blockUserManual(manualBlockPhone, manualBlockReason);
+                    setManualBlockPhone("");
+                    setManualBlockReason("");
+                    loadData();
+                  }}
+                  className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3"
+                >
+                  <h4 className="text-xs font-bold text-white">ম্যানুয়ালি নম্বর ব্লক করুন:</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <input
+                      type="tel"
+                      required
+                      value={manualBlockPhone}
+                      onChange={(e) => setManualBlockPhone(e.target.value)}
+                      placeholder="মোবাইল নম্বর (01XXXXXXXXX)"
+                      className="px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs font-mono focus:outline-none focus:border-rose-400"
+                    />
+                    <input
+                      type="text"
+                      value={manualBlockReason}
+                      onChange={(e) => setManualBlockReason(e.target.value)}
+                      placeholder="ব্লক করার কারণ (যেমন: ভুয়া TrxID)"
+                      className="px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-rose-400"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-rose-500 hover:bg-rose-400 text-white font-bold text-xs rounded-xl transition cursor-pointer"
+                  >
+                    ব্লক তালিকায় যোগ করুন
+                  </button>
+                </form>
+
+                {/* Blocked Users Table */}
+                <div className="pt-2">
+                  <h4 className="text-xs font-bold text-slate-300 mb-3">
+                    বর্তমান ব্লক তালিকা ({toBn(blockedList.length)} টি নম্বর):
+                  </h4>
+
+                  {blockedList.length === 0 ? (
+                    <div className="p-8 text-center text-slate-500 text-xs">
+                      বর্তমানে কোনো ব্লকড ব্যবহারকারী নেই।
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {blockedList.map((b) => (
+                        <div
+                          key={b.phone}
+                          className="p-3.5 rounded-xl bg-slate-950 border border-rose-500/30 flex items-center justify-between gap-3 text-xs"
+                        >
+                          <div>
+                            <span className="font-mono font-bold text-rose-300 block">{formatBdPhonePretty(b.phone)}</span>
+                            <span className="text-[11px] text-slate-400 block mt-0.5">{b.reason}</span>
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              unblockUser(b.phone);
+                              loadData();
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold transition cursor-pointer"
+                          >
+                            আনব্লক করুন
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+      </main>
+
+      {/* Edit Phone/WhatsApp Modal */}
+      {editingOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-sm space-y-4">
+            <h3 className="font-bold text-white text-sm">গ্রাহকের নম্বর আপডেট করুন</h3>
+            <form onSubmit={handleSaveEditedNumbers} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">মোবাইল নম্বর:</label>
+                <input
+                  type="tel"
+                  value={editingOrder.phone}
+                  onChange={(e) => setEditingOrder({ ...editingOrder, phone: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">WhatsApp নম্বর:</label>
+                <input
+                  type="tel"
+                  value={editingOrder.otpWhatsapp}
+                  onChange={(e) => setEditingOrder({ ...editingOrder, otpWhatsapp: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-xs"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingOrder(null)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white text-xs cursor-pointer"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded-lg bg-cyan-500 text-black font-bold text-xs cursor-pointer"
+                >
+                  সেভ করুন
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Chat Modal for an Order */}
+      {chatModalOrder && (
+        <LiveChatModal
+          onClose={() => setChatModalOrder(null)}
+          initialPhone={chatModalOrder.phone}
+          initialOrderNo={chatModalOrder.orderNo}
+          initialCustomerName={chatModalOrder.name}
+          isAdmin={true}
+        />
+      )}
+    </div>
+  );
+}

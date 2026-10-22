@@ -1,0 +1,6 @@
+{
+  "name": "NextGen Efootball",
+  "description": "NextGen Efootball — eFootball অফিসিয়াল কয়েন টপ-আপ, কম্বো প্যাক ও স্পেশাল প্লেয়ার প্যাক সার্ভিস।",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
