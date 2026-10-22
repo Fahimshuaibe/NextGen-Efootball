@@ -20,7 +20,10 @@ import {
   ProductSortOption,
   ContactMethod,
   ServiceMethod,
-  LiveChatMessage 
+  LiveChatMessage,
+  CatalogSection,
+  CatalogProduct,
+  PaymentOptionConfig
 } from "./types";
 import { 
   saveOrder, 
@@ -33,7 +36,10 @@ import {
   getActiveUserAccount,
   getOrCreateUserForGuestOrder,
   isUserUsingDefaultPassword,
-  getLiveChatMessages 
+  getLiveChatMessages,
+  getCatalogSections,
+  getCatalogProducts,
+  getPaymentOptions
 } from "./utils/storage";
 import { generateUniqueOrderId } from "./utils/orderNotification";
 import { 
@@ -58,6 +64,7 @@ import { TrackOrderModal } from "./components/TrackOrderModal";
 import { CustomerAccountModal } from "./components/CustomerAccountModal";
 import { AdminPanel } from "./components/AdminPanel";
 import { PaymentLogoBadge } from "./components/PaymentLogoBadge";
+import { NotificationDropdown } from "./components/NotificationDropdown";
 import { sendAutomaticAdminOrderAlert, sendCustomerOrderPlacedEmail } from "./utils/autoNotify";
 import { 
   Check, 
@@ -169,7 +176,7 @@ export default function App() {
   const [accountModalSection, setAccountModalSection] = useState<"dashboard" | "orders" | "details" | "verify">("dashboard");
   const [showAdminPanel, setShowAdminPanel] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<"all" | "regular" | "combos" | "playerPacks">("all");
+  const [activeTab, setActiveTab] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [showSearchDropdown, setShowSearchDropdown] = useState<boolean>(false);
   const [highlightedProductId, setHighlightedProductId] = useState<string | null>(null);
@@ -178,9 +185,18 @@ export default function App() {
 
   const [isAdminOnline, setIsAdminOnline] = useState<boolean>(getAdminOnlineStatus);
   const [shopSettings, setShopSettingsState] = useState<ShopSettings>(getShopSettings);
+  const [catalogSections, setCatalogSections] = useState<CatalogSection[]>(getCatalogSections);
+  const [catalogProducts, setCatalogProducts] = useState<CatalogProduct[]>(getCatalogProducts);
+  const [paymentOptions, setPaymentOptions] = useState<PaymentOptionConfig[]>(getPaymentOptions);
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [activePhone, setActivePhone] = useState<string>(getActiveCustomerPhone);
   const [activeCustomer, setActiveCustomer] = useState<CustomerAccount | null>(null);
   const [activeUser, setActiveUser] = useState<RegisteredUserAccount | null>(getActiveUserAccount);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const handleStatusUpdate = (e: any) => {
@@ -192,12 +208,19 @@ export default function App() {
     };
     const handleSettingsUpdate = () => {
       setShopSettingsState(getShopSettings());
+      setPaymentOptions(getPaymentOptions());
+    };
+    const handleCatalogUpdate = () => {
+      setCatalogSections(getCatalogSections());
+      setCatalogProducts(getCatalogProducts());
+      setPaymentOptions(getPaymentOptions());
     };
     const handleAccountOrPhoneChange = () => {
       const u = getActiveUserAccount();
       setActiveUser(u);
       const p = u?.phone || getActiveCustomerPhone();
       setActivePhone(p);
+      setCatalogProducts(getCatalogProducts());
       if (u) {
         setActiveCustomer(getCustomerAccount(u.id));
         setForm((prev) => ({
@@ -216,6 +239,9 @@ export default function App() {
 
     window.addEventListener("nextgen_admin_status_changed", handleStatusUpdate);
     window.addEventListener("nextgen_shop_settings_updated", handleSettingsUpdate);
+    window.addEventListener("nextgen_catalog_sections_updated", handleCatalogUpdate);
+    window.addEventListener("nextgen_catalog_products_updated", handleCatalogUpdate);
+    window.addEventListener("nextgen_payment_options_updated", handleCatalogUpdate);
     window.addEventListener("nextgen_customer_phone_changed", handleAccountOrPhoneChange);
     window.addEventListener("nextgen_user_account_updated", handleAccountOrPhoneChange);
     window.addEventListener("nextgen_orders_updated", handleAccountOrPhoneChange);
@@ -225,62 +251,49 @@ export default function App() {
     return () => {
       window.removeEventListener("nextgen_admin_status_changed", handleStatusUpdate);
       window.removeEventListener("nextgen_shop_settings_updated", handleSettingsUpdate);
+      window.removeEventListener("nextgen_catalog_sections_updated", handleCatalogUpdate);
+      window.removeEventListener("nextgen_catalog_products_updated", handleCatalogUpdate);
+      window.removeEventListener("nextgen_payment_options_updated", handleCatalogUpdate);
       window.removeEventListener("nextgen_customer_phone_changed", handleAccountOrPhoneChange);
       window.removeEventListener("nextgen_user_account_updated", handleAccountOrPhoneChange);
       window.removeEventListener("nextgen_orders_updated", handleAccountOrPhoneChange);
     };
   }, [activePhone]);
 
+  const activeSections = useMemo(() => {
+    return catalogSections.filter((s) => s.isActive);
+  }, [catalogSections]);
+
+  const activeProducts = useMemo(() => {
+    return catalogProducts.filter((p) => p.isActive);
+  }, [catalogProducts]);
+
   // Unified Searchable Catalog (Supports English & Bengali queries + Nearest Coin matching)
   const searchableCatalog: SearchableCatalogItem[] = useMemo(() => {
-    return [
-      ...PLAYER_PACKS.map((p) => {
-        const lowerTitle = `${p.title} ${p.subtitle || ""}`.toLowerCase();
-        const playerAliases =
-          lowerTitle.includes("suarez") || lowerTitle.includes("suárez") || lowerTitle.includes("সুয়ারেজ") || lowerTitle.includes("সুয়ারেজ")
-            ? "luis suarez লুইস সুয়ারেজ সুয়ারেজ"
-            : "";
-        const casillasAliases =
-          lowerTitle.includes("casillas") || lowerTitle.includes("ক্যাসিয়াস") || lowerTitle.includes("ক্যাসিয়াস")
-            ? "iker casillas ইকার ক্যাসিয়াস ক্যাসিয়াস"
-            : "";
-        return {
-          id: p.id,
-          title: p.title,
-          subtitle: p.subtitle || "স্পেশাল প্লেয়ার প্যাক",
-          price: p.price,
-          coins: p.coins,
-          image: p.image,
-          tag: p.tag,
-          category: "playerPacks" as const,
-          sectionId: `product-card-${p.id}`,
-          keywords: `${playerAliases} ${casillasAliases} starter set player pack প্লেয়ার প্যাক ${p.title} ${p.subtitle || ""}`,
-        };
-      }),
-      ...REGULAR_PACKAGES.map((r) => ({
-        id: r.id,
-        title: `${toBn(r.coins)} কয়েন (${r.coins} Coins)`,
-        subtitle: "অফিসিয়াল রেগুলার কয়েন প্যাক",
-        price: r.price,
-        coins: r.coins,
-        tag: r.tag,
-        category: "regular" as const,
-        sectionId: `product-card-${r.id}`,
-        keywords: `${r.coins} coins coin কয়েন কয়েন রেগুলার টপআপ ${toBn(r.coins)}`,
-      })),
-      ...COIN_COMBOS.map((c) => ({
-        id: c.id,
-        title: `${toBn(c.coins)} কয়েন কম্বো (${c.parts})`,
-        subtitle: c.description || "কম্বো কয়েন অফার",
-        price: c.price,
-        coins: c.coins,
-        tag: c.tag,
-        category: "combos" as const,
-        sectionId: `product-card-${c.id}`,
-        keywords: `${c.coins} combo coins কম্বো কয়েন কয়েন ${c.parts} ${toBn(c.coins)}`,
-      })),
-    ];
-  }, []);
+    return activeProducts.map((p) => {
+      const lowerTitle = `${p.name} ${p.subtitle || ""} ${p.description || ""}`.toLowerCase();
+      const playerAliases =
+        lowerTitle.includes("suarez") || lowerTitle.includes("suárez") || lowerTitle.includes("সুয়ারেজ") || lowerTitle.includes("সুয়ারেজ")
+          ? "luis suarez লুইস সুয়ারেজ সুয়ারেজ"
+          : "";
+      const casillasAliases =
+        lowerTitle.includes("casillas") || lowerTitle.includes("ক্যাসিয়াস") || lowerTitle.includes("ক্যাসিয়াস")
+          ? "iker casillas ইকার ক্যাসিয়াস ক্যাসিয়াস"
+          : "";
+      return {
+        id: p.id,
+        title: p.name,
+        subtitle: p.description || p.subtitle || (p.parts ? `কম্বো (${p.parts})` : "অফিসিয়াল কয়েন / প্যাক"),
+        price: p.price,
+        coins: p.coins ?? undefined,
+        image: p.image,
+        tag: p.tag,
+        category: p.category,
+        sectionId: `product-card-${p.id}`,
+        keywords: `${playerAliases} ${casillasAliases} ${p.name} ${p.description || ""} ${p.subtitle || ""} ${p.parts || ""} ${p.coins || ""} coins কয়েন কয়েন ${p.coins ? toBn(p.coins) : ""}`,
+      };
+    });
+  }, [activeProducts]);
 
   const searchSuggestions = useMemo(() => {
     return getSmartSearchSuggestions(searchableCatalog, searchQuery, 6);
@@ -312,33 +325,49 @@ export default function App() {
     }, 4500);
   };
 
-  // Filtered and Sorted Packages
-  const filteredPlayerPacks = useMemo(() => {
-    return filterAndSortPackages(
-      PLAYER_PACKS,
-      searchQuery,
-      sortBy,
-      (p) => `${p.title} ${p.subtitle || ""} ${p.tag || ""} প্লেয়ার প্যাক`
-    );
-  }, [searchQuery, sortBy]);
+  // Helper to check if a product's limited-time offer is expired or sold out
+  const getProductOfferStatus = (p: CatalogProduct) => {
+    if (!p.isOffer) {
+      return { isExpired: false, isSoldOut: false, remainingTimeText: null, remainingBuyers: null, maxBuyers: null as number | null, sold: 0 };
+    }
+    let isExpired = false;
+    let remainingTimeText: string | null = null;
+    if (p.offerExpiry) {
+      const diffMs = new Date(p.offerExpiry).getTime() - nowTick;
+      if (diffMs <= 0) {
+        isExpired = true;
+        remainingTimeText = "⛔ অফারের মেয়াদ শেষ";
+      } else {
+        const totalHours = Math.floor(diffMs / (1000 * 60 * 60));
+        const days = Math.floor(totalHours / 24);
+        const hours = totalHours % 24;
+        const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+        if (days > 0) {
+          remainingTimeText = `⏳ বাকি: ${toBn(days)} দিন ${toBn(hours)} ঘণ্টা`;
+        } else if (hours > 0) {
+          remainingTimeText = `⏳ বাকি: ${toBn(hours)} ঘণ্টা ${toBn(mins)} মিনিট`;
+        } else {
+          remainingTimeText = `⏳ বাকি: মাত্র ${toBn(Math.max(1, mins))} মিনিট`;
+        }
+      }
+    }
 
-  const filteredCombos = useMemo(() => {
-    return filterAndSortPackages(
-      COIN_COMBOS,
-      searchQuery,
-      sortBy,
-      (c) => `${c.coins} ${c.parts} ${c.description || ""} ${c.tag || ""} combo কম্বো কয়েন`
-    );
-  }, [searchQuery, sortBy]);
+    const maxBuyers = p.maxBuyers && p.maxBuyers > 0 ? p.maxBuyers : null;
+    const sold = p.soldCount || 0;
+    const remainingBuyers = maxBuyers !== null ? Math.max(0, maxBuyers - sold) : null;
+    const isSoldOut = remainingBuyers !== null && remainingBuyers <= 0;
+
+    return { isExpired, isSoldOut, remainingTimeText, remainingBuyers, maxBuyers, sold };
+  };
 
   const filteredRegularPackages = useMemo(() => {
     return filterAndSortPackages(
-      REGULAR_PACKAGES,
+      activeProducts.filter((p) => p.category === "regular"),
       searchQuery,
       sortBy,
-      (r) => `${r.coins} coins কয়েন কয়েন ${r.tag || ""}`
+      (r) => `${r.name} ${r.coins || ""} ${r.description || ""} coins কয়েন কয়েন ${r.tag || ""}`
     );
-  }, [searchQuery, sortBy]);
+  }, [activeProducts, searchQuery, sortBy]);
 
   const [showKonamiPassword, setShowKonamiPassword] = useState(false);
   const [sending, setSending] = useState(false);
@@ -346,21 +375,28 @@ export default function App() {
   const [copiedNumber, setCopiedNumber] = useState(false);
   const [copiedBankKey, setCopiedBankKey] = useState<string | null>(null);
 
-  // All 6 payment methods combined with dynamic shop settings for bKash & Nagad
-  const dynamicPayments: PaymentMethod[] = useMemo(() => {
+  // All 6 payment methods combined with dynamic shop settings AND Admin enable/disable status
+  const dynamicPayments = useMemo(() => {
     return PAYMENTS.map((pay) => {
+      const opt = paymentOptions.find((o) => o.id === pay.id);
+      let num = opt?.number || pay.number;
       if (pay.id === "bkash" && shopSettings.bkashNumber) {
-        return { ...pay, number: shopSettings.bkashNumber };
+        num = shopSettings.bkashNumber;
       }
       if (pay.id === "nagad" && shopSettings.nagadNumber) {
-        return { ...pay, number: shopSettings.nagadNumber };
+        num = shopSettings.nagadNumber;
       }
-      return pay;
+      return {
+        ...pay,
+        number: num,
+        isEnabled: opt ? opt.isEnabled : true,
+        disabledReason: opt?.disabledReason || "যান্ত্রিক ত্রুটির কারণে এই পেমেন্ট মেথডটি সাময়িকভাবে বন্ধ আছে।",
+      };
     });
-  }, [shopSettings]);
+  }, [shopSettings, paymentOptions]);
 
   const currentPay = useMemo(() => {
-    return dynamicPayments.find((p) => p.id === form.payment) || dynamicPayments[0];
+    return dynamicPayments.find((p) => p.id === form.payment) || dynamicPayments.find((p) => p.isEnabled) || dynamicPayments[0];
   }, [form.payment, dynamicPayments]);
 
   const selectedBankAccount = useMemo(() => {
@@ -541,6 +577,15 @@ export default function App() {
       return;
     }
 
+    // Ensure selected payment method is enabled when moving to Step 2
+    const currentMethodObj = dynamicPayments.find((p) => p.id === form.payment);
+    if (currentMethodObj && !currentMethodObj.isEnabled) {
+      const firstEnabled = dynamicPayments.find((p) => p.isEnabled);
+      if (firstEnabled) {
+        setForm((prev) => ({ ...prev, payment: firstEnabled.id }));
+      }
+    }
+
     setOrderStep("step2_methods");
     setTimeout(() => {
       document.getElementById("order-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -549,6 +594,14 @@ export default function App() {
 
   // Select a payment method from Step 2 Grid -> open Step 3 Instructions & Verification
   const handleSelectPaymentMethod = (methodId: string) => {
+    const targetPay = dynamicPayments.find((p) => p.id === methodId);
+    if (targetPay && !targetPay.isEnabled) {
+      setFormError(
+        `🚫 ${targetPay.label} পেমেন্ট অপশনটি বর্তমানে বন্ধ আছে (${targetPay.disabledReason || "সাময়িক রক্ষণাবেক্ষণ"})। অনুগ্রহ করে অন্য একটি চালু পেমেন্ট অপশন সিলেক্ট করুন।`
+      );
+      return;
+    }
+
     setFormError("");
     setForm((prev) => ({
       ...prev,
@@ -821,6 +874,13 @@ export default function App() {
               )}
             </button>
 
+            {/* In-App Notifications Bell Dropdown */}
+            <NotificationDropdown
+              activePhone={activePhone}
+              onViewReceipt={(ord) => setActiveReceiptOrder(ord)}
+              onTrackOrder={() => setShowTrackModal(true)}
+            />
+
             {/* Cart Trigger */}
             <a
               href="#order-section"
@@ -845,13 +905,15 @@ export default function App() {
             <select
               aria-label="প্যাকেজ ক্যাটাগরি ফিল্টার"
               value={activeTab}
-              onChange={(e) => setActiveTab(e.target.value as any)}
+              onChange={(e) => setActiveTab(e.target.value)}
               className="px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs font-bold text-slate-200 focus:outline-none focus:border-cyan-400 cursor-pointer shrink-0"
             >
-              <option value="all">All Categories</option>
-              <option value="playerPacks">প্লেয়ার প্যাক</option>
-              <option value="combos">কয়েন কম্বো অফার</option>
-              <option value="regular">রেগুলার কয়েন</option>
+              <option value="all">সকল ক্যাটাগরি (All)</option>
+              {activeSections.map((sec) => (
+                <option key={sec.id} value={sec.id}>
+                  {sec.icon ? `${sec.icon} ` : ""}{sec.name}
+                </option>
+              ))}
             </select>
 
             {/* Search Input + Live Dropdown List */}
@@ -1014,103 +1076,46 @@ export default function App() {
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3.5">
-            {/* Box 1: স্পেশাল প্লেয়ার প্যাক */}
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab("playerPacks");
-                setTimeout(() => {
-                  document.getElementById("player-packs-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                }, 50);
-              }}
-              className={`p-2.5 sm:p-4 rounded-2xl text-left transition-all duration-200 cursor-pointer shadow-lg group relative flex items-center gap-2.5 sm:gap-3.5 border ${
-                activeTab === "playerPacks"
-                  ? "bg-slate-900 border-cyan-400 ring-2 ring-cyan-500/40 shadow-cyan-500/20"
-                  : "bg-slate-900/90 border-slate-800 hover:border-cyan-500/50 hover:bg-slate-900"
-              }`}
-            >
-              <div className={`p-2 sm:p-2.5 rounded-xl shrink-0 transition ${
-                activeTab === "playerPacks"
-                  ? "bg-cyan-500 text-black shadow-md shadow-cyan-500/30"
-                  : "bg-cyan-500/10 text-cyan-400 group-hover:bg-cyan-500/20"
-              }`}>
-                <Trophy className="w-4 h-4 sm:w-5 sm:h-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="font-extrabold text-xs sm:text-sm text-white group-hover:text-cyan-300 transition leading-tight">
-                  স্পেশাল প্লেয়ার প্যাক
-                </div>
-                <div className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5 truncate">
-                  সুয়ারেজ, ক্যাসিয়াস প্যাক
-                </div>
-              </div>
-            </button>
+            {activeSections.map((sec) => {
+              const isSelected = activeTab === sec.id;
+              return (
+                <button
+                  key={sec.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveTab(sec.id);
+                    setTimeout(() => {
+                      document.getElementById(`section-block-${sec.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }, 50);
+                  }}
+                  className={`p-2.5 sm:p-4 rounded-2xl text-left transition-all duration-200 cursor-pointer shadow-lg group relative flex items-center gap-2.5 sm:gap-3.5 border ${
+                    isSelected
+                      ? "bg-slate-900 border-cyan-400 ring-2 ring-cyan-500/40 shadow-cyan-500/20"
+                      : "bg-slate-900/90 border-slate-800 hover:border-cyan-500/50 hover:bg-slate-900"
+                  }`}
+                >
+                  <div
+                    className={`p-2 sm:p-2.5 rounded-xl shrink-0 transition flex items-center justify-center text-base sm:text-lg ${
+                      isSelected
+                        ? "bg-cyan-500 text-black shadow-md shadow-cyan-500/30"
+                        : "bg-cyan-500/10 text-cyan-400 group-hover:bg-cyan-500/20"
+                    }`}
+                  >
+                    <span>{sec.icon || "🔥"}</span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-extrabold text-xs sm:text-sm text-white group-hover:text-cyan-300 transition leading-tight truncate">
+                      {sec.name}
+                    </div>
+                    <div className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5 truncate">
+                      {sec.subtitle || sec.badge || "অফিসিয়াল প্যাক"}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
 
-            {/* Box 2: কয়েন এর অফার */}
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab("combos");
-                setTimeout(() => {
-                  document.getElementById("combos-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                }, 50);
-              }}
-              className={`p-2.5 sm:p-4 rounded-2xl text-left transition-all duration-200 cursor-pointer shadow-lg group relative flex items-center gap-2.5 sm:gap-3.5 border ${
-                activeTab === "combos"
-                  ? "bg-slate-900 border-amber-400 ring-2 ring-amber-500/40 shadow-amber-500/20"
-                  : "bg-slate-900/90 border-slate-800 hover:border-amber-500/50 hover:bg-slate-900"
-              }`}
-            >
-              <div className={`p-2 sm:p-2.5 rounded-xl shrink-0 transition ${
-                activeTab === "combos"
-                  ? "bg-amber-500 text-black shadow-md shadow-amber-500/30"
-                  : "bg-amber-500/10 text-amber-400 group-hover:bg-amber-500/20"
-              }`}>
-                <Zap className="w-4 h-4 sm:w-5 sm:h-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="font-extrabold text-xs sm:text-sm text-white group-hover:text-amber-300 transition leading-tight">
-                  কয়েন এর অফার
-                </div>
-                <div className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5 truncate">
-                  ডিসকাউন্ট কম্বো ও সেভার
-                </div>
-              </div>
-            </button>
-
-            {/* Box 3: রেগুলার কয়েন */}
-            <button
-              type="button"
-              onClick={() => {
-                setActiveTab("regular");
-                setTimeout(() => {
-                  document.getElementById("regular-coins-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                }, 50);
-              }}
-              className={`p-2.5 sm:p-4 rounded-2xl text-left transition-all duration-200 cursor-pointer shadow-lg group relative flex items-center gap-2.5 sm:gap-3.5 border ${
-                activeTab === "regular"
-                  ? "bg-slate-900 border-emerald-400 ring-2 ring-emerald-500/40 shadow-emerald-500/20"
-                  : "bg-slate-900/90 border-slate-800 hover:border-emerald-500/50 hover:bg-slate-900"
-              }`}
-            >
-              <div className={`p-2 sm:p-2.5 rounded-xl shrink-0 transition ${
-                activeTab === "regular"
-                  ? "bg-emerald-500 text-black shadow-md shadow-emerald-500/30"
-                  : "bg-emerald-500/10 text-emerald-400 group-hover:bg-emerald-500/20"
-              }`}>
-                <Coins className="w-4 h-4 sm:w-5 sm:h-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="font-extrabold text-xs sm:text-sm text-white group-hover:text-emerald-300 transition leading-tight">
-                  রেগুলার কয়েন
-                </div>
-                <div className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5 truncate">
-                  ১৩০ - ১২,৮০০ কয়েন সরাসরি
-                </div>
-              </div>
-            </button>
-
-            {/* Box 4: সব অফার একসাথে */}
+            {/* Box: সব অফার একসাথে */}
             <button
               type="button"
               onClick={() => {
@@ -1125,11 +1130,13 @@ export default function App() {
                   : "bg-slate-900/90 border-slate-800 hover:border-teal-500/50 hover:bg-slate-900"
               }`}
             >
-              <div className={`p-2 sm:p-2.5 rounded-xl shrink-0 transition ${
-                activeTab === "all"
-                  ? "bg-teal-500 text-black shadow-md shadow-teal-500/30"
-                  : "bg-teal-500/10 text-teal-400 group-hover:bg-teal-500/20"
-              }`}>
+              <div
+                className={`p-2 sm:p-2.5 rounded-xl shrink-0 transition ${
+                  activeTab === "all"
+                    ? "bg-teal-500 text-black shadow-md shadow-teal-500/30"
+                    : "bg-teal-500/10 text-teal-400 group-hover:bg-teal-500/20"
+                }`}
+              >
                 <Layers className="w-4 h-4 sm:w-5 sm:h-5" />
               </div>
               <div className="min-w-0 flex-1">
@@ -1144,247 +1151,321 @@ export default function App() {
           </div>
         </div>
 
-        {/* 1. PLAYER PACKS */}
-        {(activeTab === "all" || activeTab === "playerPacks") && filteredPlayerPacks.length > 0 && (
-          <div id="player-packs-section" className="space-y-3 scroll-mt-24">
-            <div className="flex items-center justify-between">
-              <h2 className="text-base sm:text-lg font-extrabold text-white flex items-center gap-2">
-                <span>⚽ লেজেন্ডারি প্লেয়ার প্যাক (ছবিসহ)</span>
-                <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-2 py-0.5 rounded-full border border-cyan-500/30">
-                  ইন-গেম কয়েন সহ
-                </span>
-              </h2>
-            </div>
+        {/* DYNAMIC SECTIONS & PRODUCTS RENDERER */}
+        {activeSections.map((sec) => {
+          if (activeTab !== "all" && activeTab !== sec.id) return null;
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-              {filteredPlayerPacks.map((pack) => (
-                <div
-                  key={pack.id}
-                  id={`product-card-${pack.id}`}
-                  className={`bg-slate-900/90 border rounded-2xl p-4 flex flex-col justify-between transition duration-300 group shadow-lg scroll-mt-28 ${
-                    highlightedProductId === pack.id
-                      ? "border-cyan-400 ring-2 ring-cyan-400/60 shadow-cyan-500/30"
-                      : "border-slate-800 hover:border-cyan-500/40"
-                  }`}
-                >
-                  <div className="space-y-3">
-                    <div className="relative overflow-hidden rounded-xl bg-slate-950 aspect-video flex items-center justify-center border border-slate-800">
-                      <img
-                        src={pack.image}
-                        alt={pack.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                      />
-                      {pack.tag && (
-                        <span className="absolute top-2 right-2 px-2 py-0.5 rounded-full text-[10px] font-black bg-cyan-500 text-black">
-                          {pack.tag}
+          const secProducts = filterAndSortPackages(
+            activeProducts.filter((p) => p.category === sec.id),
+            searchQuery,
+            sortBy,
+            (p) => `${p.name} ${p.subtitle || ""} ${p.description || ""} ${p.parts || ""} ${p.coins || ""} ${p.tag || ""} কয়েন প্যাক`
+          );
+
+          if (secProducts.length === 0) return null;
+
+          const isCompactCoinGrid = sec.id === "regular" && secProducts.every((p) => !p.image && !p.isOffer && !p.description);
+
+          return (
+            <div key={sec.id} id={`section-block-${sec.id}`} className="space-y-3 pt-2 scroll-mt-24">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-base sm:text-lg font-extrabold text-white flex items-center gap-2">
+                  <span>{sec.icon || "🔥"} {sec.name}</span>
+                  {sec.badge && (
+                    <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-2.5 py-0.5 rounded-full border border-cyan-500/30">
+                      {sec.badge}
+                    </span>
+                  )}
+                </h2>
+                {sec.subtitle && (
+                  <span className="text-xs text-slate-400 hidden sm:inline">{sec.subtitle}</span>
+                )}
+              </div>
+
+              {isCompactCoinGrid ? (
+                /* COMPACT 5-COLUMN REGULAR COIN GRID (when no custom photo/offer/description is set) */
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
+                  {secProducts.map((pkg, idx) => (
+                    <div
+                      key={pkg.id}
+                      id={`product-card-${pkg.id}`}
+                      className={`bg-slate-900/90 border rounded-2xl p-3 sm:p-4 flex flex-col justify-between transition duration-200 shadow-md relative scroll-mt-28 ${
+                        highlightedProductId === pkg.id
+                          ? "border-cyan-400 ring-2 ring-cyan-400/60 shadow-cyan-500/30"
+                          : "border-slate-800 hover:border-cyan-500/40"
+                      }`}
+                    >
+                      {requestedCoinAmount !== null && !hasExactCoinMatch && idx === 0 ? (
+                        <span className="absolute -top-2 right-2 px-2 py-0.5 rounded-full text-[9px] font-black bg-amber-400 text-black shadow">
+                          সবচেয়ে কাছাকাছি
                         </span>
-                      )}
-                    </div>
+                      ) : pkg.tag ? (
+                        <span
+                          className={`absolute -top-2 right-2 px-2 py-0.5 rounded-full text-[9px] font-black uppercase shadow ${
+                            pkg.tag === "সেরা দাম"
+                              ? "bg-gradient-to-r from-emerald-400 to-teal-400 text-black"
+                              : "bg-cyan-500 text-black"
+                          }`}
+                        >
+                          {pkg.tag}
+                        </span>
+                      ) : null}
 
-                    <div>
-                      <h3 className="font-extrabold text-white text-sm group-hover:text-cyan-400 transition">
-                        {pack.title}
-                      </h3>
-                      <p className="text-xs text-slate-400 mt-0.5">{pack.subtitle}</p>
-                    </div>
-                  </div>
+                      <div className="pt-1">
+                        <div className="text-xs text-slate-400 font-semibold truncate">{pkg.name}</div>
+                        {pkg.coins !== null && pkg.coins !== undefined && (
+                          <div className="text-lg font-black text-white font-mono mt-0.5">
+                            {toBn(pkg.coins)} 🪙
+                          </div>
+                        )}
+                        <div className="flex items-baseline gap-1.5 mt-1">
+                          <span className="text-base font-black text-emerald-400 font-mono">
+                            ৳ {toBn(pkg.price)}
+                          </span>
+                          {pkg.originalPrice && pkg.originalPrice > pkg.price && (
+                            <span className="text-[11px] text-slate-500 line-through font-mono">
+                              ৳{toBn(pkg.originalPrice)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
 
-                  <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] text-slate-400 block">মূল্য:</span>
-                      <span className="text-lg font-black text-emerald-400 font-mono">
-                        ৳ {toBn(pack.price)}
-                      </span>
-                    </div>
+                      <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-center gap-1.5">
+                        <button
+                          onClick={() =>
+                            addToCart({
+                              id: pkg.id,
+                              name: pkg.name,
+                              price: pkg.price,
+                              coins: pkg.coins,
+                              image: pkg.image,
+                              category: pkg.category,
+                            })
+                          }
+                          className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 transition cursor-pointer"
+                          title="কার্টে যোগ করুন"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
 
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => addToCart({
-                          id: pack.id,
-                          name: pack.title,
-                          price: pack.price,
-                          coins: pack.coins,
-                          image: pack.image,
-                          category: "player_pack"
-                        })}
-                        className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 transition cursor-pointer"
-                        title="কার্টে যোগ করুন"
-                      >
-                        <Plus className="w-4 h-4" />
-                      </button>
-
-                      <button
-                        onClick={() => buyNow({
-                          id: pack.id,
-                          name: pack.title,
-                          price: pack.price,
-                          coins: pack.coins,
-                          image: pack.image,
-                          category: "player_pack"
-                        })}
-                        className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black font-extrabold text-xs transition cursor-pointer"
-                      >
-                        কিনুন
-                      </button>
+                        <button
+                          onClick={() =>
+                            buyNow({
+                              id: pkg.id,
+                              name: pkg.name,
+                              price: pkg.price,
+                              coins: pkg.coins,
+                              image: pkg.image,
+                              category: pkg.category,
+                            })
+                          }
+                          className="flex-1 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-black font-extrabold text-[11px] transition cursor-pointer text-center"
+                        >
+                          কিনুন
+                        </button>
+                      </div>
                     </div>
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* 2. COMBO PACKS */}
-        {(activeTab === "all" || activeTab === "combos") && filteredCombos.length > 0 && (
-          <div id="combos-section" className="space-y-3 pt-2 scroll-mt-24">
-            <h2 className="text-base sm:text-lg font-extrabold text-white flex items-center gap-2">
-              <span>🎁 কয়েন এর অফার ও কম্বো প্যাক</span>
-              <span className="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30">
-                বেশি সেভিংস
-              </span>
-            </h2>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-              {filteredCombos.map((combo) => (
+              ) : (
+                /* RICH PRODUCT CARDS (Supports Images, Descriptions, Coin Badges, Limited-Time Flash Offers & Buyer Quotas) */
                 <div
-                  key={combo.id}
-                  id={`product-card-${combo.id}`}
-                  className={`bg-slate-900/90 border rounded-2xl p-4 sm:p-5 flex flex-col justify-between transition duration-300 shadow-lg scroll-mt-28 ${
-                    highlightedProductId === combo.id
-                      ? "border-amber-400 ring-2 ring-amber-400/60 shadow-amber-500/30"
-                      : "border-slate-800 hover:border-amber-500/40"
-                  }`}
+                  className={`grid grid-cols-1 ${
+                    sec.id === "combo" ? "md:grid-cols-2" : "sm:grid-cols-2 lg:grid-cols-3"
+                  } gap-3.5`}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <span className="px-2 py-0.5 rounded text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase">
-                        {combo.tag || "কম্বো"}
-                      </span>
-                      <h3 className="font-extrabold text-white text-base mt-1.5">
-                        {combo.coins} কয়েন কম্বো ({combo.parts})
-                      </h3>
-                      <p className="text-xs text-slate-400 mt-1">{combo.description}</p>
-                    </div>
+                  {secProducts.map((prod) => {
+                    const offerInfo = getProductOfferStatus(prod);
+                    const isUnavailable = offerInfo.isExpired || offerInfo.isSoldOut;
 
-                    <div className="text-right shrink-0">
-                      <span className="text-xl font-black text-emerald-400 font-mono block">
-                        ৳ {toBn(combo.price)}
-                      </span>
-                    </div>
-                  </div>
+                    return (
+                      <div
+                        key={prod.id}
+                        id={`product-card-${prod.id}`}
+                        className={`bg-slate-900/95 border rounded-2xl p-4 flex flex-col justify-between transition duration-300 group shadow-lg relative scroll-mt-28 ${
+                          highlightedProductId === prod.id
+                            ? "border-cyan-400 ring-2 ring-cyan-400/60 shadow-cyan-500/30"
+                            : prod.isOffer
+                            ? "border-amber-500/50 hover:border-amber-400 shadow-amber-500/10"
+                            : "border-slate-800 hover:border-cyan-500/40"
+                        }`}
+                      >
+                        <div className="space-y-3">
+                          {/* Product Image (if provided) */}
+                          {prod.image && (
+                            <div className="relative overflow-hidden rounded-xl bg-slate-950 aspect-video flex items-center justify-center border border-slate-800">
+                              <img
+                                src={prod.image}
+                                alt={prod.name}
+                                className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                              />
+                              <div className="absolute top-2 left-2 right-2 flex items-center justify-between gap-1.5 flex-wrap">
+                                {prod.isOffer ? (
+                                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-gradient-to-r from-amber-500 to-rose-500 text-white shadow flex items-center gap-1">
+                                    <Flame className="w-3 h-3" />
+                                    <span>স্পেশাল অফার</span>
+                                  </span>
+                                ) : <span />}
+                                {prod.tag && (
+                                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-cyan-500 text-black shadow">
+                                    {prod.tag}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
 
-                  <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
-                    <button
-                      onClick={() => addToCart({
-                        id: combo.id,
-                        name: `${combo.coins} কয়েন (${combo.parts})`,
-                        price: combo.price,
-                        coins: combo.coins,
-                        category: "combo"
-                      })}
-                      className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition cursor-pointer flex items-center gap-1"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>কার্টে যোগ</span>
-                    </button>
+                          {/* Top Badges when there is no image */}
+                          {!prod.image && (
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {prod.isOffer && (
+                                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-gradient-to-r from-amber-500 to-rose-500 text-white shadow flex items-center gap-1">
+                                    <Flame className="w-3 h-3" />
+                                    <span>🔥 স্পেশাল অফার</span>
+                                  </span>
+                                )}
+                                {prod.tag && (
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase">
+                                    {prod.tag}
+                                  </span>
+                                )}
+                              </div>
+                              {prod.coins !== null && prod.coins !== undefined && prod.coins > 0 && (
+                                <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 font-mono text-xs font-black">
+                                  {toBn(prod.coins)} 🪙
+                                </span>
+                              )}
+                            </div>
+                          )}
 
-                    <button
-                      onClick={() => buyNow({
-                        id: combo.id,
-                        name: `${combo.coins} কয়েন (${combo.parts})`,
-                        price: combo.price,
-                        coins: combo.coins,
-                        category: "combo"
-                      })}
-                      className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 text-black font-extrabold text-xs transition cursor-pointer"
-                    >
-                      এখনই অর্ডার করুন
-                    </button>
-                  </div>
+                          {/* Title, Coins & Description */}
+                          <div>
+                            <div className="flex items-start justify-between gap-2">
+                              <h3 className="font-extrabold text-white text-sm sm:text-base group-hover:text-cyan-400 transition">
+                                {prod.name}
+                                {prod.parts ? ` (${prod.parts})` : ""}
+                              </h3>
+                              {prod.image && prod.coins !== null && prod.coins !== undefined && prod.coins > 0 && (
+                                <span className="px-2 py-0.5 rounded-lg bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 font-mono text-xs font-black shrink-0">
+                                  {toBn(prod.coins)} 🪙
+                                </span>
+                              )}
+                            </div>
+
+                            {(prod.description || prod.subtitle) && (
+                              <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                                {prod.description || prod.subtitle}
+                              </p>
+                            )}
+                          </div>
+
+                          {/* Limited-Time Offer Countdown & Buyer Quota Strip */}
+                          {prod.isOffer && (offerInfo.remainingTimeText || offerInfo.maxBuyers !== null) && (
+                            <div className="p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/30 space-y-1.5 text-[11px]">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                {offerInfo.remainingTimeText && (
+                                  <span
+                                    className={`font-extrabold flex items-center gap-1 ${
+                                      offerInfo.isExpired ? "text-rose-400" : "text-amber-300"
+                                    }`}
+                                  >
+                                    <Clock className="w-3.5 h-3.5 shrink-0" />
+                                    <span>{offerInfo.remainingTimeText}</span>
+                                  </span>
+                                )}
+
+                                {offerInfo.maxBuyers !== null && (
+                                  <span
+                                    className={`font-extrabold px-2 py-0.5 rounded-md border ${
+                                      offerInfo.isSoldOut
+                                        ? "bg-rose-500/20 text-rose-300 border-rose-500/40"
+                                        : "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                                    }`}
+                                  >
+                                    {offerInfo.isSoldOut
+                                      ? `⛔ কোটা শেষ (${toBn(offerInfo.maxBuyers)}/${toBn(offerInfo.maxBuyers)} জন)`
+                                      : `👥 মাত্র ${toBn(offerInfo.maxBuyers)} জন পাবেন (বাকি: ${toBn(offerInfo.remainingBuyers!)} জন)`}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Price & Action Buttons */}
+                        <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between gap-2">
+                          <div>
+                            <span className="text-[10px] text-slate-400 block">মূল্য:</span>
+                            <div className="flex items-baseline gap-2">
+                              <span className="text-lg sm:text-xl font-black text-emerald-400 font-mono">
+                                ৳ {toBn(prod.price)}
+                              </span>
+                              {prod.originalPrice && prod.originalPrice > prod.price && (
+                                <span className="text-xs text-slate-500 line-through font-mono">
+                                  ৳ {toBn(prod.originalPrice)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={isUnavailable}
+                              onClick={() =>
+                                addToCart({
+                                  id: prod.id,
+                                  name: prod.parts ? `${prod.name} (${prod.parts})` : prod.name,
+                                  price: prod.price,
+                                  coins: prod.coins,
+                                  image: prod.image,
+                                  category: prod.category,
+                                })
+                              }
+                              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              title="কার্টে যোগ করুন"
+                            >
+                              <Plus className="w-4 h-4" />
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={isUnavailable}
+                              onClick={() =>
+                                buyNow({
+                                  id: prod.id,
+                                  name: prod.parts ? `${prod.name} (${prod.parts})` : prod.name,
+                                  price: prod.price,
+                                  coins: prod.coins,
+                                  image: prod.image,
+                                  category: prod.category,
+                                })
+                              }
+                              className={`px-3.5 py-2 rounded-xl font-extrabold text-xs transition cursor-pointer ${
+                                isUnavailable
+                                  ? "bg-slate-800 text-rose-400 border border-rose-500/30 cursor-not-allowed"
+                                  : prod.isOffer
+                                  ? "bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-black shadow-md shadow-amber-500/20"
+                                  : "bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black"
+                              }`}
+                            >
+                              {offerInfo.isSoldOut
+                                ? "কোটা শেষ"
+                                : offerInfo.isExpired
+                                ? "সময় শেষ"
+                                : "এখনই কিনুন"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
+              )}
             </div>
-          </div>
-        )}
-
-        {/* 3. REGULAR PACKAGES */}
-        {(activeTab === "all" || activeTab === "regular") && filteredRegularPackages.length > 0 && (
-          <div id="regular-coins-section" className="space-y-3 pt-2 scroll-mt-24">
-            <h2 className="text-base sm:text-lg font-extrabold text-white flex items-center gap-2">
-              <span>💎 রেগুলার কয়েন প্যাকেজসমূহ</span>
-              <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full border border-slate-700">
-                অফিসিয়াল ইন-গেম রেট
-              </span>
-            </h2>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
-              {filteredRegularPackages.map((pkg, idx) => (
-                <div
-                  key={pkg.id}
-                  id={`product-card-${pkg.id}`}
-                  className={`bg-slate-900/90 border rounded-2xl p-3 sm:p-4 flex flex-col justify-between transition duration-200 shadow-md relative scroll-mt-28 ${
-                    highlightedProductId === pkg.id
-                      ? "border-cyan-400 ring-2 ring-cyan-400/60 shadow-cyan-500/30"
-                      : "border-slate-800 hover:border-cyan-500/40"
-                  }`}
-                >
-                  {requestedCoinAmount !== null && !hasExactCoinMatch && idx === 0 ? (
-                    <span className="absolute -top-2 right-2 px-2 py-0.5 rounded-full text-[9px] font-black bg-amber-400 text-black shadow">
-                      সবচেয়ে কাছাকাছি
-                    </span>
-                  ) : pkg.tag ? (
-                    <span className={`absolute -top-2 right-2 px-2 py-0.5 rounded-full text-[9px] font-black uppercase shadow ${
-                      pkg.tag === "সেরা দাম" 
-                        ? "bg-gradient-to-r from-emerald-400 to-teal-400 text-black" 
-                        : "bg-cyan-500 text-black"
-                    }`}>
-                      {pkg.tag}
-                    </span>
-                  ) : null}
-
-                  <div className="pt-1">
-                    <div className="text-xs text-slate-400 font-semibold">eFootball কয়েন</div>
-                    <div className="text-lg font-black text-white font-mono mt-0.5">
-                      {toBn(pkg.coins)} 🪙
-                    </div>
-                    <div className="text-base font-black text-emerald-400 font-mono mt-1">
-                      ৳ {toBn(pkg.price)}
-                    </div>
-                  </div>
-
-                  <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-center gap-1.5">
-                    <button
-                      onClick={() => addToCart({
-                        id: pkg.id,
-                        name: `${pkg.coins} কয়েন`,
-                        price: pkg.price,
-                        coins: pkg.coins,
-                        category: "regular"
-                      })}
-                      className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 transition cursor-pointer"
-                      title="Add to Cart"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
-
-                    <button
-                      onClick={() => buyNow({
-                        id: pkg.id,
-                        name: `${pkg.coins} কয়েন`,
-                        price: pkg.price,
-                        coins: pkg.coins,
-                        category: "regular"
-                      })}
-                      className="flex-1 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 text-black font-extrabold text-[11px] transition cursor-pointer text-center"
-                    >
-                      কিনুন
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+          );
+        })}
       </section>
 
       {/* CHECKOUT & ORDER FORM SECTION */}
@@ -1416,23 +1497,26 @@ export default function App() {
               <select
                 value=""
                 onChange={(e) => {
-                  const found = ALL_OFFERS.find((o) => o.id === e.target.value);
+                  const found = activeProducts.find((o) => o.id === e.target.value);
                   if (found) {
+                    const offerCheck = getProductOfferStatus(found);
+                    if (offerCheck.isExpired || offerCheck.isSoldOut) return;
                     addToCart({
                       id: found.id,
-                      name: found.name,
+                      name: found.parts ? `${found.name} (${found.parts})` : found.name,
                       price: found.price,
                       coins: found.coins,
-                      category: found.category as any
+                      image: found.image,
+                      category: found.category,
                     });
                   }
                 }}
                 className="px-3 py-1.5 rounded-xl bg-slate-900 border border-cyan-500/40 text-xs font-bold text-cyan-300 focus:outline-none cursor-pointer"
               >
                 <option value="">+ এখান থেকে কয়েন বা প্যাক যোগ করুন...</option>
-                {ALL_OFFERS.map((offer) => (
+                {activeProducts.map((offer) => (
                   <option key={offer.id} value={offer.id}>
-                    {offer.name} — ৳{toBn(offer.price)}
+                    {offer.name} {offer.parts ? `(${offer.parts})` : ""} — ৳{toBn(offer.price)}
                   </option>
                 ))}
               </select>
@@ -1918,22 +2002,38 @@ export default function App() {
                   </button>
                 </div>
 
+                {/* Error Message inside Step 2 if user clicks a disabled payment option */}
+                {formError && (
+                  <div className="p-3.5 rounded-xl bg-rose-100 border border-rose-300 text-rose-800 text-xs font-bold flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                    <span>{formError}</span>
+                  </div>
+                )}
+
                 {/* 2-Column Payment Options Grid: bKash, Nagad, Rocket, Upay, Cellfin, Bank Account */}
                 <div className="grid grid-cols-2 gap-3 sm:gap-3.5">
                   {dynamicPayments.map((pay) => {
                     const isSelected = form.payment === pay.id;
+                    const isDisabled = !pay.isEnabled;
                     return (
                       <button
                         key={pay.id}
                         type="button"
                         onClick={() => handleSelectPaymentMethod(pay.id)}
-                        className={`min-h-[82px] sm:min-h-[90px] p-3.5 rounded-2xl bg-white border-2 transition-all cursor-pointer flex flex-col items-center justify-center gap-1 shadow-xs hover:shadow-md ${
-                          isSelected
-                            ? "border-[#7c2ae8] ring-2 ring-[#7c2ae8]/20"
-                            : "border-slate-200/90 hover:border-purple-400"
+                        className={`min-h-[82px] sm:min-h-[94px] p-3.5 rounded-2xl border-2 transition-all flex flex-col items-center justify-center gap-1 shadow-xs relative ${
+                          isDisabled
+                            ? "bg-slate-200/70 border-rose-300 opacity-65 cursor-not-allowed"
+                            : isSelected
+                            ? "bg-white border-[#7c2ae8] ring-2 ring-[#7c2ae8]/20 cursor-pointer hover:shadow-md"
+                            : "bg-white border-slate-200/90 hover:border-purple-400 cursor-pointer hover:shadow-md"
                         }`}
                       >
                         <PaymentLogoBadge methodId={pay.id} size="md" />
+                        {isDisabled && (
+                          <span className="mt-1 px-2 py-0.5 rounded-full bg-rose-600 text-white text-[9px] font-black">
+                            🚫 সাময়িকভাবে বন্ধ
+                          </span>
+                        )}
                       </button>
                     );
                   })}

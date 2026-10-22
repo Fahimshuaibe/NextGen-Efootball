@@ -203,7 +203,7 @@ export interface SearchableCatalogItem {
   coins?: number;
   image?: string;
   tag?: string;
-  category: "regular" | "combos" | "playerPacks";
+  category: string;
   sectionId: string;
   keywords?: string;
 }
@@ -304,7 +304,7 @@ export function getSmartSearchSuggestions(
 }
 
 export function filterAndSortPackages<
-  T extends { id: string; price: number; coins?: number; tag?: string }
+  T extends { id: string; price: number; coins?: number | null; tag?: string }
 >(
   items: T[],
   searchQuery: string,
@@ -389,7 +389,7 @@ export function filterAndSortPackages<
   return sortPackagesList(directMatches, sortBy);
 }
 
-function sortPackagesList<T extends { id: string; price: number; coins?: number; tag?: string }>(
+function sortPackagesList<T extends { id: string; price: number; coins?: number | null; tag?: string }>(
   list: T[],
   sortBy: ProductSortOption
 ): T[] {

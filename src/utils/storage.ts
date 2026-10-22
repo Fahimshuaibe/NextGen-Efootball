@@ -8,11 +8,15 @@ import {
   CustomerAccount, 
   RegisteredUserAccount,
   ShopSettings,
-  LiveChatMessage 
+  LiveChatMessage,
+  AppNotification,
+  CatalogProduct,
+  CatalogSection,
+  PaymentOptionConfig
 } from "../types";
 import { triggerDesktopNotification, playOrderNotificationSound } from "./notification";
 import { SITE, PAYMENTS } from "../config";
-import { convertBnToEnDigits, formatBdWhatsappForUrl } from "./order";
+import { convertBnToEnDigits, formatBdWhatsappForUrl, toBn } from "./order";
 import {
   computeOrderOwnershipSignature,
   verifyOrderUserRelationship,
@@ -29,6 +33,7 @@ const REGISTERED_USERS_KEY = "nextgen_registered_users_v1";
 const ACTIVE_USER_ID_KEY = "nextgen_active_user_id_v1";
 const LIVE_CHAT_KEY = "nextgen_live_chat_messages_v1";
 const NOTIFICATION_LOGS_KEY = "nextgen_order_notification_logs_v1";
+const APP_NOTIFICATIONS_KEY = "nextgen_app_notifications_v1";
 
 export function isAdminSessionAuthorized(): boolean {
   try {
@@ -939,6 +944,41 @@ export function saveOrder(order: Order): void {
       setActiveCustomerPhone(enrichedOrder.phone);
     }
 
+    // Automatically record in-app customer notification
+    saveAppNotification({
+      id: `notif_${enrichedOrder.orderNo}_created`,
+      type: "order_created",
+      title: `🎉 নতুন অর্ডার #${enrichedOrder.orderNo} গৃহীত!`,
+      message: `আপনার ${enrichedOrder.packageName} (৳${toBn(enrichedOrder.price)}) অর্ডারটি গ্রহণ করা হয়েছে। ৫-১০ মিনিটে প্রসেসিং শুরু হবে।`,
+      orderNo: enrichedOrder.orderNo,
+      orderStatus: "pending",
+      targetPhone: enrichedOrder.phone,
+      badge: "অর্ডার",
+      badgeColor: "sky",
+      isRead: false,
+      createdAt: nowIso
+    });
+
+    // Automatically count quota claims for limited-time offers
+    if (enrichedOrder.items && enrichedOrder.items.length > 0) {
+      try {
+        const prods = getCatalogProducts();
+        let changed = false;
+        enrichedOrder.items.forEach(it => {
+          const pIdx = prods.findIndex(p => p.id === it.id);
+          if (pIdx !== -1 && prods[pIdx].isOffer) {
+            prods[pIdx].soldCount = (prods[pIdx].soldCount || 0) + (it.quantity || 1);
+            changed = true;
+          }
+        });
+        if (changed) {
+          saveCatalogProducts(prods);
+        }
+      } catch (err) {
+        console.error("Failed to update offer quota count", err);
+      }
+    }
+
     window.dispatchEvent(new CustomEvent("nextgen_orders_updated", { detail: enrichedOrder }));
     
     // Trigger desktop notification & sound
@@ -948,6 +988,46 @@ export function saveOrder(order: Order): void {
     );
   } catch (err) {
     console.error("Failed to save order to storage", err);
+  }
+}
+
+export function notifyOrderStatusInApp(order: Order, newStatus: OrderStatus, note?: string) {
+  let title = "";
+  let message = "";
+  let badge = "";
+  let badgeColor: "emerald" | "amber" | "rose" | "sky" | "purple" = "sky";
+
+  if (newStatus === "processing") {
+    title = `⚡ অর্ডার #${order.orderNo} প্রসেসিং চলছে!`;
+    message = `আপনার অ্যাকাউন্টে কয়েন/প্যাক টপ-আপের কাজ শুরু হয়েছে। শীঘ্রই কমপ্লিট হবে।`;
+    badge = "প্রসেসিং";
+    badgeColor = "amber";
+  } else if (newStatus === "completed") {
+    title = `✅ অর্ডার #${order.orderNo} কমপ্লিট হয়েছে!`;
+    message = `আপনার অ্যাকাউন্টে কয়েন সফলভাবে ডেলিভারি দেওয়া হয়েছে। গেমে লগইন করে ব্যালেন্স চেক করুন!`;
+    badge = "কমপ্লিট";
+    badgeColor = "emerald";
+  } else if (newStatus === "cancelled") {
+    title = `❌ অর্ডার #${order.orderNo} বাতিল করা হয়েছে`;
+    message = note || "পেমেন্ট TrxID অথবা Konami পাসওয়ার্ডে সমস্যা পাওয়া গেছে। অনুগ্রহ করে সহায়তায় যোগাযোগ করুন।";
+    badge = "বাতিল";
+    badgeColor = "rose";
+  }
+
+  if (title) {
+    saveAppNotification({
+      id: `notif_${order.orderNo}_${newStatus}_${Date.now()}`,
+      type: `order_${newStatus}` as any,
+      title,
+      message,
+      orderNo: order.orderNo,
+      orderStatus: newStatus,
+      targetPhone: order.phone,
+      badge,
+      badgeColor,
+      isRead: false,
+      createdAt: new Date().toISOString()
+    });
   }
 }
 
@@ -999,6 +1079,8 @@ export function updateOrderStatus(
     note: adminNotes !== undefined ? adminNotes : undefined,
   };
 
+  const oldStatus = orders[idx].status;
+
   orders[idx] = {
     ...orders[idx],
     status,
@@ -1008,6 +1090,11 @@ export function updateOrderStatus(
   };
 
   localStorage.setItem(STORAGE_KEY, JSON.stringify(orders));
+
+  if (oldStatus !== status) {
+    notifyOrderStatusInApp(orders[idx], status, adminNotes);
+  }
+
   window.dispatchEvent(new Event("nextgen_orders_updated"));
   return orders[idx];
 }
@@ -1047,6 +1134,11 @@ export function updateOrderDetails(orderNo: string, updates: Partial<Order>): Or
   };
 
   localStorage.setItem(STORAGE_KEY, JSON.stringify(orders));
+
+  if (statusChanged && updates.status) {
+    notifyOrderStatusInApp(orders[idx], updates.status, updates.adminNotes);
+  }
+
   window.dispatchEvent(new Event("nextgen_orders_updated"));
   return orders[idx];
 }
@@ -1267,3 +1359,493 @@ export function getAllChatConversations(): {
 
   return convos.sort((a, b) => b.lastMessage.timestamp - a.lastMessage.timestamp);
 }
+
+// ===== 10. IN-APP HEADER NOTIFICATIONS & ADMIN ANNOUNCEMENTS =====
+const INITIAL_NOTIFICATIONS: AppNotification[] = [
+  {
+    id: "notif_welcome_01",
+    type: "announcement",
+    title: "🎉 NextGen Efootball-এ স্বাগতম!",
+    message: "eFootball 2026 এর অফিসিয়াল কয়েন টপ-আপ ও স্পেশাল প্লেয়ার প্যাক এখন ৫-১০ মিনিটে ফাস্ট ডেলিভারিতে উপলব্ধ!",
+    badge: "ঘোষণা",
+    badgeColor: "sky",
+    isRead: false,
+    createdAt: new Date().toISOString()
+  },
+  {
+    id: "notif_offer_01",
+    type: "limited_offer",
+    title: "🔥 স্পেশাল লিমিটেড টাইম অফার!",
+    message: "যেকোনো কয়েন কম্বো বা প্লেয়ার প্যাক অর্ডারে স্পেশাল ক্যাশব্যাক ও বোনাস কয়েন সুবিধা উপভোগ করুন!",
+    badge: "অফার",
+    badgeColor: "amber",
+    isRead: false,
+    createdAt: new Date(Date.now() - 3600000).toISOString()
+  }
+];
+
+export function getAppNotifications(): AppNotification[] {
+  try {
+    const raw = localStorage.getItem(APP_NOTIFICATIONS_KEY);
+    if (!raw) {
+      localStorage.setItem(APP_NOTIFICATIONS_KEY, JSON.stringify(INITIAL_NOTIFICATIONS));
+      return INITIAL_NOTIFICATIONS;
+    }
+    return JSON.parse(raw);
+  } catch {
+    return INITIAL_NOTIFICATIONS;
+  }
+}
+
+export function saveAppNotification(notif: AppNotification): void {
+  try {
+    const list = getAppNotifications();
+    const updated = [notif, ...list.filter(n => n.id !== notif.id)];
+    localStorage.setItem(APP_NOTIFICATIONS_KEY, JSON.stringify(updated.slice(0, 60)));
+    window.dispatchEvent(new CustomEvent("nextgen_app_notifications_changed", { detail: notif }));
+  } catch (err) {
+    console.error("Failed to save app notification", err);
+  }
+}
+
+export function markNotificationAsRead(id: string): void {
+  try {
+    const list = getAppNotifications();
+    const updated = list.map(n => n.id === id ? { ...n, isRead: true } : n);
+    localStorage.setItem(APP_NOTIFICATIONS_KEY, JSON.stringify(updated));
+    window.dispatchEvent(new Event("nextgen_app_notifications_changed"));
+  } catch (err) {
+    console.error("Failed to mark notification as read", err);
+  }
+}
+
+export function markAllNotificationsAsRead(): void {
+  try {
+    const list = getAppNotifications();
+    const updated = list.map(n => ({ ...n, isRead: true }));
+    localStorage.setItem(APP_NOTIFICATIONS_KEY, JSON.stringify(updated));
+    window.dispatchEvent(new Event("nextgen_app_notifications_changed"));
+  } catch (err) {
+    console.error("Failed to mark all notifications as read", err);
+  }
+}
+
+export function deleteAppNotification(id: string): void {
+  try {
+    const list = getAppNotifications();
+    const updated = list.filter(n => n.id !== id);
+    localStorage.setItem(APP_NOTIFICATIONS_KEY, JSON.stringify(updated));
+    window.dispatchEvent(new Event("nextgen_app_notifications_changed"));
+  } catch (err) {
+    console.error("Failed to delete notification", err);
+  }
+}
+
+export function broadcastAdminAnnouncement(params: {
+  title: string;
+  message: string;
+  type?: 'announcement' | 'limited_offer';
+}): AppNotification {
+  const notif: AppNotification = {
+    id: `notif_admin_${Date.now()}`,
+    type: params.type || "announcement",
+    title: params.title.trim(),
+    message: params.message.trim(),
+    badge: params.type === "limited_offer" ? "অফার" : "ঘোষণা",
+    badgeColor: params.type === "limited_offer" ? "amber" : "purple",
+    isRead: false,
+    createdAt: new Date().toISOString()
+  };
+  saveAppNotification(notif);
+  return notif;
+}
+
+// ===== 11. DYNAMIC CATALOG SECTIONS & PRODUCTS MANAGEMENT =====
+const CATALOG_SECTIONS_KEY = "nextgen_catalog_sections_v3";
+const CATALOG_PRODUCTS_KEY = "nextgen_catalog_products_v3";
+const PAYMENT_OPTIONS_KEY = "nextgen_payment_options_v3";
+
+export const DEFAULT_CATALOG_SECTIONS: CatalogSection[] = [
+  {
+    id: "player_pack",
+    name: "লেজেন্ডারি প্লেয়ার প্যাক (ছবিসহ)",
+    subtitle: "লুইস সুয়ারেজ, ইকার ক্যাসিয়াস ও স্পেশাল বান্ডেল",
+    badge: "ইন-গেম কয়েন সহ",
+    icon: "⚽",
+    order: 1,
+    isActive: true,
+  },
+  {
+    id: "combo",
+    name: "কয়েন এর অফার ও কম্বো প্যাক",
+    subtitle: "একত্রে বেশি কয়েন নিয়ে বাড়তি সেভিংস অফার",
+    badge: "বেশি সেভিংস",
+    icon: "🎁",
+    order: 2,
+    isActive: true,
+  },
+  {
+    id: "regular",
+    name: "রেগুলার কয়েন প্যাকেজসমূহ",
+    subtitle: "সরাসরি ইন-গেম টপ-আপ (সবচেয়ে দ্রুত ডেলিভারি)",
+    badge: "অফিসিয়াল ইন-গেম রেট",
+    icon: "💎",
+    order: 3,
+    isActive: true,
+  },
+];
+
+export const DEFAULT_CATALOG_PRODUCTS: CatalogProduct[] = [
+  {
+    id: "pp1",
+    name: "Starter Set: Luis Suárez + 50 Coins",
+    description: "CF 99 Luis Suárez কার্ড + ইন-গেম ৫০ কয়েন ইনস্ট্যান্ট ডেলিভারি",
+    subtitle: "CF 99 Luis Suárez কার্ড + ইন-গেম ৫০ কয়েন",
+    price: 130,
+    coins: 50,
+    image: "/assets/aistudio/Screenshot_20260929-225847_72392c40.png",
+    emoji: "⚽",
+    category: "player_pack",
+    tag: "জনপ্রিয় প্যাক",
+    isActive: true,
+    order: 1,
+  },
+  {
+    id: "pp2",
+    name: "Starter Set: Iker Casillas + 100 Coins",
+    description: "GK 100 Casillas + CMF 95 + AMF 96 + ১০০ কয়েন ইনস্ট্যান্ট ডেলিভারি",
+    subtitle: "GK 100 Casillas + CMF 95 + AMF 96 + ১০০ কয়েন",
+    price: 320,
+    coins: 100,
+    image: "/assets/aistudio/casillas_card.png",
+    emoji: "🧤",
+    category: "player_pack",
+    tag: "লেজেন্ডারি প্যাক",
+    isActive: true,
+    order: 2,
+  },
+  {
+    id: "pp3",
+    name: "Combo: Suárez Pack + Casillas Pack",
+    description: "সুয়ারেজ ও ক্যাসিয়াস দুটো প্যাক একসাথে (১৫০ কয়েন + প্লেয়ার বান্ডেল)",
+    subtitle: "সুয়ারেজ ও ক্যাসিয়াস দুটো প্যাক একসাথে (১৫০ কয়েন + প্লেয়ার বান্ডেল)",
+    price: 420,
+    coins: 150,
+    image: "/assets/aistudio/combo_suarez_casillas.png",
+    emoji: "🔥",
+    isCombo: true,
+    category: "player_pack",
+    tag: "সেরা কম্বো অফার",
+    isActive: true,
+    order: 3,
+  },
+  {
+    id: "c1",
+    name: "১৫০০ কয়েন স্পেশাল কম্বো (1000 + 500 Coins)",
+    description: "১৫০০ কয়েন (1000+500) স্পেশাল কম্বো অফার",
+    subtitle: "1000 + 500 Coins স্পেশাল কম্বো অফার",
+    parts: "1000 + 500 Coins",
+    price: 1620,
+    coins: 1500,
+    category: "combo",
+    tag: "স্পেশাল কম্বো",
+    isActive: true,
+    order: 4,
+  },
+  {
+    id: "c2",
+    name: "২৫০০ কয়েন সর্বোচ্চ সেভিংস (2000 + 500 Coins)",
+    description: "২৫০০ কয়েন (2000+500) সর্বোচ্চ সেভিংস কম্বো প্যাক",
+    subtitle: "2000 + 500 Coins সর্বোচ্চ সেভিংস কম্বো প্যাক",
+    parts: "2000 + 500 Coins",
+    price: 2600,
+    coins: 2500,
+    category: "combo",
+    tag: "বেশি সেভিংস",
+    isActive: true,
+    order: 5,
+  },
+  { id: "p1", name: "১০০ কয়েন (100 Coins)", description: "১০০ কয়েন সরাসরি ইন-গেম টপ-আপ", price: 140, coins: 100, category: "regular", isActive: true, order: 6 },
+  { id: "p2", name: "৩০০ কয়েন (300 Coins)", description: "৩০০ কয়েন সরাসরি ইন-গেম টপ-আপ", price: 370, coins: 300, category: "regular", isActive: true, order: 7 },
+  { id: "p3", name: "৫০০ কয়েন (500 Coins)", description: "৫০০ কয়েন সরাসরি ইন-গেম টপ-আপ", price: 600, coins: 500, tag: "জনপ্রিয়", category: "regular", isActive: true, order: 8 },
+  { id: "p4", name: "১,০০০ কয়েন (1000 Coins)", description: "১,০০০ কয়েন সরাসরি ইন-গেম টপ-আপ", price: 1100, coins: 1000, tag: "জনপ্রিয়", category: "regular", isActive: true, order: 9 },
+  { id: "p5", name: "২,০০০ কয়েন (2000 Coins)", description: "২,০০০ কয়েন সরাসরি ইন-গেম টপ-আপ", price: 2050, coins: 2000, tag: "জনপ্রিয়", category: "regular", isActive: true, order: 10 },
+  { id: "p6", name: "৩,০০০ কয়েন (3000 Coins)", description: "৩,০০০ কয়েন সরাসরি ইন-গেম টপ-আপ", price: 2980, coins: 3000, tag: "সেরা দাম", category: "regular", isActive: true, order: 11 },
+  { id: "p7", name: "৫,০০০ কয়েন (5000 Coins)", description: "৫,০০০ কয়েন সরাসরি ইন-গেম টপ-আপ", price: 4700, coins: 5000, tag: "সেরা দাম", category: "regular", isActive: true, order: 12 },
+  { id: "p8", name: "১০,০০০ কয়েন (10000 Coins)", description: "১০,০০০ কয়েন সরাসরি ইন-গেম টপ-আপ", price: 8900, coins: 10000, tag: "সেরা দাম", category: "regular", isActive: true, order: 13 },
+  { id: "p9", name: "১৫,০০০ কয়েন (15000 Coins)", description: "১৫,০০০ কয়েন সরাসরি ইন-গেম টপ-আপ", price: 13100, coins: 15000, tag: "সেরা দাম", category: "regular", isActive: true, order: 14 },
+];
+
+export const DEFAULT_PAYMENT_OPTIONS: PaymentOptionConfig[] = [
+  {
+    id: "bkash",
+    name: "bKash (বিকাশ)",
+    shortName: "bKash",
+    bnName: "বিকাশ",
+    number: "01629802989",
+    type: "Personal Account",
+    dialCode: "*247#",
+    appAction: "Send Money",
+    instruction: "bKash অ্যাপ বা *247# ডায়াল করে Send Money করুন",
+    category: "mobile_banking",
+    color: "#e2136e",
+    cardBg: "#d81b60",
+    isEnabled: true,
+  },
+  {
+    id: "nagad",
+    name: "Nagad (নগদ)",
+    shortName: "Nagad",
+    bnName: "নগদ",
+    number: "01629802989",
+    type: "Personal Account",
+    dialCode: "*167#",
+    appAction: "Send Money",
+    instruction: "Nagad অ্যাপ বা *167# ডায়াল করে Send Money করুন",
+    category: "mobile_banking",
+    color: "#f6921e",
+    cardBg: "#e65100",
+    isEnabled: true,
+  },
+  {
+    id: "rocket",
+    name: "Rocket (রকেট)",
+    shortName: "Rocket",
+    bnName: "রকেট",
+    number: "01777414308",
+    type: "Personal Account",
+    dialCode: "*322#",
+    appAction: "Send Money",
+    instruction: "Rocket অ্যাপ বা *322# ডায়াল করে Send Money করুন",
+    category: "mobile_banking",
+    color: "#8c3494",
+    cardBg: "#7b1fa2",
+    isEnabled: true,
+  },
+  {
+    id: "upay",
+    name: "Upay (উপায়)",
+    shortName: "Upay",
+    bnName: "উপায়",
+    number: "01629802989",
+    type: "Personal Account",
+    dialCode: "*268#",
+    appAction: "Send Money",
+    instruction: "Upay অ্যাপ বা *268# ডায়াল করে Send Money করুন",
+    category: "mobile_banking",
+    color: "#0072bc",
+    cardBg: "#005baa",
+    isEnabled: true,
+  },
+  {
+    id: "cellfin",
+    name: "Cellfin (সেলফিন)",
+    shortName: "Cellfin",
+    bnName: "সেলফিন",
+    number: "01777414308",
+    type: "Personal Account",
+    appAction: "Fund Transfer / Send Money",
+    instruction: "Cellfin অ্যাপ থেকে এই নম্বরে Send Money / Transfer করুন",
+    category: "mobile_banking",
+    color: "#008542",
+    cardBg: "#006a4e",
+    isEnabled: true,
+  },
+  {
+    id: "bank",
+    name: "Bank Account (NPSB)",
+    shortName: "Bank Transfer",
+    bnName: "ব্যাংক একাউন্ট",
+    number: "0020-0466009896",
+    type: "NPSB Instant Transfer",
+    appAction: "NPSB (Instant Transfer)",
+    instruction: "ব্যাংক অ্যাপ থেকে অবশ্যই NPSB সিলেক্ট করে টাকা পাঠান",
+    category: "bank_transfer",
+    color: "#2563eb",
+    cardBg: "#1e3a8a",
+    isEnabled: true,
+  },
+];
+
+// 11.1 Catalog Sections
+export function getCatalogSections(): CatalogSection[] {
+  try {
+    const raw = localStorage.getItem(CATALOG_SECTIONS_KEY);
+    if (!raw) {
+      localStorage.setItem(CATALOG_SECTIONS_KEY, JSON.stringify(DEFAULT_CATALOG_SECTIONS));
+      return DEFAULT_CATALOG_SECTIONS;
+    }
+    const parsed: CatalogSection[] = JSON.parse(raw);
+    return parsed.sort((a, b) => a.order - b.order);
+  } catch {
+    return DEFAULT_CATALOG_SECTIONS;
+  }
+}
+
+export function saveCatalogSections(sections: CatalogSection[]): void {
+  try {
+    localStorage.setItem(CATALOG_SECTIONS_KEY, JSON.stringify(sections));
+    window.dispatchEvent(new CustomEvent("nextgen_catalog_sections_updated", { detail: sections }));
+  } catch (err) {
+    console.error("Failed to save catalog sections", err);
+  }
+}
+
+export function addCatalogSection(sectionData: Omit<CatalogSection, "id">): CatalogSection {
+  const sections = getCatalogSections();
+  const id = `sec_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const newSection: CatalogSection = {
+    ...sectionData,
+    id,
+    order: sectionData.order ?? sections.length + 1,
+    isActive: sectionData.isActive ?? true,
+  };
+  const updated = [...sections, newSection];
+  saveCatalogSections(updated);
+  return newSection;
+}
+
+export function updateCatalogSection(id: string, updates: Partial<CatalogSection>): CatalogSection | null {
+  const sections = getCatalogSections();
+  const idx = sections.findIndex(s => s.id === id);
+  if (idx === -1) return null;
+  sections[idx] = { ...sections[idx], ...updates };
+  saveCatalogSections(sections);
+  return sections[idx];
+}
+
+export function deleteCatalogSection(id: string): boolean {
+  const sections = getCatalogSections();
+  const filtered = sections.filter(s => s.id !== id);
+  saveCatalogSections(filtered);
+  return true;
+}
+
+// 11.2 Catalog Products
+export function getCatalogProducts(): CatalogProduct[] {
+  try {
+    const raw = localStorage.getItem(CATALOG_PRODUCTS_KEY);
+    if (!raw) {
+      localStorage.setItem(CATALOG_PRODUCTS_KEY, JSON.stringify(DEFAULT_CATALOG_PRODUCTS));
+      return DEFAULT_CATALOG_PRODUCTS;
+    }
+    return JSON.parse(raw);
+  } catch {
+    return DEFAULT_CATALOG_PRODUCTS;
+  }
+}
+
+export function saveCatalogProducts(products: CatalogProduct[]): void {
+  try {
+    localStorage.setItem(CATALOG_PRODUCTS_KEY, JSON.stringify(products));
+    window.dispatchEvent(new CustomEvent("nextgen_catalog_products_updated", { detail: products }));
+  } catch (err) {
+    console.error("Failed to save catalog products", err);
+  }
+}
+
+export function addCatalogProduct(data: Omit<CatalogProduct, "id">): CatalogProduct {
+  const products = getCatalogProducts();
+  const id = `prod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const newProduct: CatalogProduct = {
+    ...data,
+    id,
+    isActive: data.isActive ?? true,
+    order: data.order ?? products.length + 1,
+  };
+  const updated = [newProduct, ...products];
+  saveCatalogProducts(updated);
+  return newProduct;
+}
+
+export function updateCatalogProduct(id: string, updates: Partial<CatalogProduct>): CatalogProduct | null {
+  const products = getCatalogProducts();
+  const idx = products.findIndex(p => p.id === id);
+  if (idx === -1) return null;
+  products[idx] = { ...products[idx], ...updates };
+  saveCatalogProducts(products);
+  return products[idx];
+}
+
+export function deleteCatalogProduct(id: string): boolean {
+  const products = getCatalogProducts();
+  const filtered = products.filter(p => p.id !== id);
+  saveCatalogProducts(filtered);
+  return true;
+}
+
+export function resetDefaultCatalog(): void {
+  saveCatalogSections(DEFAULT_CATALOG_SECTIONS);
+  saveCatalogProducts(DEFAULT_CATALOG_PRODUCTS);
+}
+
+// 11.3 Payment Options Configuration (Enable/Disable Payment Methods)
+export function getPaymentOptions(): PaymentOptionConfig[] {
+  try {
+    const raw = localStorage.getItem(PAYMENT_OPTIONS_KEY);
+    const shop = getShopSettings();
+    let currentOptions: PaymentOptionConfig[];
+
+    if (!raw) {
+      currentOptions = DEFAULT_PAYMENT_OPTIONS.map(p => {
+        if (p.id === "bkash" && shop.bkashNumber) return { ...p, number: shop.bkashNumber };
+        if (p.id === "nagad" && shop.nagadNumber) return { ...p, number: shop.nagadNumber };
+        return p;
+      });
+      localStorage.setItem(PAYMENT_OPTIONS_KEY, JSON.stringify(currentOptions));
+      return currentOptions;
+    }
+
+    currentOptions = JSON.parse(raw);
+    // Ensure all default payment methods exist
+    const map = new Map<string, PaymentOptionConfig>(currentOptions.map(p => [p.id, p]));
+    DEFAULT_PAYMENT_OPTIONS.forEach(def => {
+      if (!map.has(def.id)) {
+        currentOptions.push(def);
+      }
+    });
+
+    // Synchronize shop settings numbers if updated
+    return currentOptions.map(p => {
+      const label = p.label || `${p.name} (${p.bnName})`;
+      if (p.id === "bkash" && shop.bkashNumber && !p.number) return { ...p, label, number: shop.bkashNumber };
+      if (p.id === "nagad" && shop.nagadNumber && !p.number) return { ...p, label, number: shop.nagadNumber };
+      return { ...p, label };
+    });
+  } catch {
+    return DEFAULT_PAYMENT_OPTIONS.map(p => ({ ...p, label: `${p.name} (${p.bnName})` }));
+  }
+}
+
+export function savePaymentOptions(options: PaymentOptionConfig[]): void {
+  try {
+    localStorage.setItem(PAYMENT_OPTIONS_KEY, JSON.stringify(options));
+    window.dispatchEvent(new CustomEvent("nextgen_payment_options_updated", { detail: options }));
+  } catch (err) {
+    console.error("Failed to save payment options", err);
+  }
+}
+
+export function updatePaymentOption(id: string, updates: Partial<PaymentOptionConfig>): PaymentOptionConfig | null {
+  const options = getPaymentOptions();
+  const idx = options.findIndex(p => p.id === id);
+  if (idx === -1) return null;
+  options[idx] = { ...options[idx], ...updates };
+  savePaymentOptions(options);
+
+  // If phone number updated, sync back to shop settings for bkash & nagad
+  if (updates.number) {
+    if (id === "bkash") updateShopSettings({ bkashNumber: updates.number });
+    if (id === "nagad") updateShopSettings({ nagadNumber: updates.number });
+  }
+
+  return options[idx];
+}
+
+export function togglePaymentMethod(id: string, isEnabled: boolean, disabledReason?: string): PaymentOptionConfig | null {
+  return updatePaymentOption(id, { 
+    isEnabled, 
+    disabledReason: isEnabled ? "" : (disabledReason || "সার্ভার সাময়িক বন্ধ থাকায় এই পেমেন্ট অপশনটি বন্ধ রাখা হয়েছে।") 
+  });
+}
+

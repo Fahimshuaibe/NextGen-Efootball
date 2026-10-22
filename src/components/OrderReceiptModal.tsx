@@ -60,43 +60,252 @@ export function OrderReceiptModal({ order, onClose }: Props) {
   });
 
   const handlePrint = () => {
-    window.print();
+    // Check if an existing print iframe exists and remove it
+    const existingIframe = document.getElementById("receipt-print-iframe");
+    if (existingIframe) {
+      existingIframe.remove();
+    }
+
+    const iframe = document.createElement("iframe");
+    iframe.id = "receipt-print-iframe";
+    iframe.style.position = "fixed";
+    iframe.style.top = "-9999px";
+    iframe.style.left = "-9999px";
+    iframe.style.width = "800px";
+    iframe.style.height = "600px";
+    iframe.style.border = "none";
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document;
+    if (!doc) {
+      window.print();
+      return;
+    }
+
+    const itemsHtml = order.items && order.items.length > 0
+      ? order.items.map((item) => `
+          <div style="display:flex; justify-content:space-between; align-items:center; padding: 6px 0; border-bottom: 1px dashed #e2e8f0; font-size: 13px;">
+            <span style="font-weight:600; color:#1e293b;">${item.name} (${item.quantity}টি)</span>
+            <span style="font-weight:700; color:#0f766e;">৳ ${toBn(item.price * item.quantity)}</span>
+          </div>
+        `).join("")
+      : `
+          <div style="display:flex; justify-content:space-between; align-items:center; padding: 6px 0; font-size: 13px;">
+            <span style="font-weight:600; color:#1e293b;">${order.packageName}</span>
+            <span style="font-weight:700; color:#0f766e;">৳ ${toBn(order.price)}</span>
+          </div>
+        `;
+
+    const statusBadgeText = order.status === "completed" 
+      ? "কমপ্লিটেড (Completed)" 
+      : order.status === "processing" 
+      ? "প্রসেসিং (Processing)" 
+      : order.status === "cancelled"
+      ? "ক্যানসেলড (Cancelled)"
+      : "পেন্ডিং (Pending)";
+
+    const statusBadgeColor = order.status === "completed"
+      ? "background:#dcfce7; color:#15803d; border:1px solid #86efac;"
+      : order.status === "processing"
+      ? "background:#e0f2fe; color:#0369a1; border:1px solid #7dd3fc;"
+      : order.status === "cancelled"
+      ? "background:#ffe4e6; color:#be123c; border:1px solid #fda4af;"
+      : "background:#fef3c7; color:#b45309; border:1px solid #fcd34d;";
+
+    doc.open();
+    doc.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>NextGen-Receipt-${order.orderNo}</title>
+          <style>
+            @page {
+              size: A4 portrait;
+              margin: 12mm;
+            }
+            * {
+              margin: 0;
+              padding: 0;
+              box-sizing: border-box;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            }
+            body {
+              background: #ffffff;
+              color: #0f172a;
+              display: flex;
+              justify-content: center;
+              padding: 10px;
+            }
+            .receipt-card {
+              width: 100%;
+              max-width: 480px;
+              background: #ffffff;
+              border: 1.5px solid #cbd5e1;
+              border-radius: 16px;
+              padding: 22px;
+              page-break-inside: avoid;
+              page-break-after: avoid;
+            }
+            .header {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              border-bottom: 2px solid #e2e8f0;
+              padding-bottom: 14px;
+              margin-bottom: 14px;
+            }
+            .brand-name {
+              font-size: 18px;
+              font-weight: 900;
+              color: #0284c7;
+              letter-spacing: -0.5px;
+            }
+            .brand-tag {
+              font-size: 10px;
+              color: #64748b;
+              margin-top: 2px;
+            }
+            .status-badge {
+              display: inline-block;
+              padding: 4px 10px;
+              border-radius: 9999px;
+              font-size: 11px;
+              font-weight: 800;
+              ${statusBadgeColor}
+            }
+            .order-no {
+              font-size: 11px;
+              font-family: monospace;
+              color: #64748b;
+              margin-top: 4px;
+              font-weight: bold;
+            }
+            .date-row {
+              display: flex;
+              justify-content: space-between;
+              font-size: 11px;
+              color: #64748b;
+              margin-bottom: 14px;
+            }
+            .memo-badge {
+              font-weight: 800;
+              color: #0284c7;
+            }
+            .details-box {
+              background: #f8fafc;
+              border: 1px solid #e2e8f0;
+              border-radius: 12px;
+              padding: 14px;
+              margin-bottom: 14px;
+            }
+            .row {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              padding: 6px 0;
+              font-size: 12px;
+            }
+            .row-border {
+              border-bottom: 1px solid #f1f5f9;
+            }
+            .label {
+              color: #64748b;
+            }
+            .value {
+              font-weight: 700;
+              color: #0f172a;
+            }
+            .total-row {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              padding-top: 10px;
+              margin-top: 8px;
+              border-top: 2px solid #cbd5e1;
+              font-size: 15px;
+              font-weight: 900;
+            }
+            .total-val {
+              color: #0f766e;
+              font-size: 18px;
+            }
+            .footer {
+              text-align: center;
+              font-size: 11px;
+              color: #64748b;
+              padding-top: 4px;
+              line-height: 1.4;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="receipt-card">
+            <div class="header">
+              <div>
+                <div class="brand-name">${SITE.name}</div>
+                <div class="brand-tag">${SITE.tagline}</div>
+              </div>
+              <div style="text-align: right;">
+                <div class="status-badge">${statusBadgeText}</div>
+                <div class="order-no">#${order.orderNo}</div>
+              </div>
+            </div>
+
+            <div class="date-row">
+              <span>তারিখ: ${formattedDate}</span>
+              <span class="memo-badge">ডিজিটাল ক্যাশমেমো</span>
+            </div>
+
+            <div class="details-box">
+              <div class="row row-border">
+                <span class="label">গ্রাহকের নাম:</span>
+                <span class="value">${order.name}</span>
+              </div>
+              <div style="padding: 6px 0; border-bottom: 1px solid #f1f5f9;">
+                <span class="label" style="font-size:11px; display:block; margin-bottom:4px;">অর্ডারকৃত পণ্য / আইটেম:</span>
+                ${itemsHtml}
+              </div>
+              <div class="row row-border">
+                <span class="label">পেমেন্ট মেথড:</span>
+                <span class="value">${order.paymentMethod}</span>
+              </div>
+              <div class="total-row">
+                <span>সর্বমোট মূল্য:</span>
+                <span class="total-val">৳ ${toBn(order.price)}</span>
+              </div>
+            </div>
+
+            <div class="footer">
+              ধন্যবাদ আমাদের সাথে থাকার জন্য! NextGen Efootball-এর পক্ষ থেকে আপনাকে স্বাগতম।
+            </div>
+          </div>
+        </body>
+      </html>
+    `);
+    doc.close();
+
+    // Trigger print strictly inside the isolated 1-page iframe!
+    setTimeout(() => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch (err) {
+        console.error("Iframe print error", err);
+        window.print();
+      }
+    }, 250);
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm overflow-y-auto print:p-0 print:bg-white print:fixed print:inset-0">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm overflow-y-auto">
       <style>{`
         @media print {
-          body, html {
-            height: auto !important;
-            overflow: visible !important;
-            background: white !important;
+          body > #root {
+            display: none !important;
           }
-          body * {
-            visibility: hidden !important;
-          }
-          #digital-receipt-printable, #digital-receipt-printable * {
-            visibility: visible !important;
-          }
-          #digital-receipt-printable {
-            position: absolute !important;
-            left: 0 !important;
-            top: 0 !important;
-            width: 100% !important;
-            height: auto !important;
-            max-height: none !important;
-            margin: 0 !important;
-            padding: 10px !important;
-            background: white !important;
-            color: black !important;
-            box-shadow: none !important;
-            border: none !important;
-            page-break-after: avoid !important;
-            page-break-inside: avoid !important;
-          }
-          @page {
-            size: portrait;
-            margin: 10mm;
+          #receipt-print-iframe {
+            display: block !important;
           }
         }
       `}</style>

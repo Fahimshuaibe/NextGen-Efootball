@@ -43,7 +43,7 @@ export interface CartItem {
   coins?: number | null;
   quantity: number;
   image?: string;
-  category: 'regular' | 'combo' | 'player_pack';
+  category: 'regular' | 'combo' | 'player_pack' | string;
 }
 
 export type ProductSortOption =
@@ -52,6 +52,28 @@ export type ProductSortOption =
   | 'latest'
   | 'price_asc'
   | 'price_desc';
+
+export type NotificationType =
+  | 'order_created'
+  | 'order_processing'
+  | 'order_completed'
+  | 'order_cancelled'
+  | 'announcement'
+  | 'limited_offer';
+
+export interface AppNotification {
+  id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  createdAt: string;
+  isRead: boolean;
+  orderNo?: string;
+  orderStatus?: OrderStatus;
+  targetPhone?: string; // Optional: specific to a phone or empty/undefined for all users
+  badge?: string;
+  badgeColor?: 'emerald' | 'amber' | 'rose' | 'sky' | 'purple';
+}
 
 export interface Order {
   orderNo: string;
@@ -118,6 +140,59 @@ export interface RegisteredUserAccount {
   verificationCode?: string;
   autoCreatedFromOrder?: boolean;
   createdAt: string;
+}
+
+export interface CatalogSection {
+  id: string;
+  name: string;
+  subtitle?: string;
+  badge?: string;
+  icon?: string;
+  order: number;
+  isActive: boolean;
+}
+
+export interface CatalogProduct {
+  id: string;
+  name: string;
+  description?: string;
+  price: number;
+  originalPrice?: number;
+  coins?: number | null;
+  image?: string;
+  emoji?: string;
+  category: string;
+  tag?: string;
+  parts?: string;
+  subtitle?: string;
+  isCombo?: boolean;
+  isActive: boolean;
+  order?: number;
+
+  // Sudden / Limited-Time Offer fields
+  isOffer?: boolean;
+  offerExpiry?: string;
+  offerDurationDays?: number;
+  maxBuyers?: number;
+  soldCount?: number;
+}
+
+export interface PaymentOptionConfig {
+  id: string;
+  name: string;
+  label?: string;
+  shortName: string;
+  bnName: string;
+  number: string;
+  type: string;
+  dialCode?: string;
+  appAction: string;
+  instruction: string;
+  category: 'mobile_banking' | 'bank_transfer';
+  color: string;
+  cardBg: string;
+  isEnabled: boolean;
+  disabledReason?: string;
 }
 
 export interface CoinPackage {

@@ -6,7 +6,8 @@ import {
   BlockedUser, 
   CustomerAccount, 
   ShopSettings,
-  LiveChatMessage 
+  LiveChatMessage,
+  PaymentOptionConfig
 } from "../types";
 import { 
   getOrders, 
@@ -33,7 +34,13 @@ import {
   sendLiveChatMessage,
   markChatAsRead,
   getActiveCustomerPhone,
-  getNotificationLogs
+  getNotificationLogs,
+  getAppNotifications,
+  broadcastAdminAnnouncement,
+  deleteAppNotification,
+  getPaymentOptions,
+  updatePaymentOption,
+  togglePaymentMethod
 } from "../utils/storage";
 import { 
   playOrderNotificationSound, 
@@ -87,7 +94,10 @@ import {
   MessageSquare,
   Gift,
   HelpCircle,
-  Play
+  Play,
+  Megaphone,
+  Flame,
+  Sparkles
 } from "lucide-react";
 import { LiveChatModal } from "./LiveChatModal";
 import {
@@ -104,13 +114,14 @@ import {
   getEventTypeForStatus,
   getOrderStatusLabelBn,
 } from "../utils/orderNotification";
+import { AdminProductManager } from "./AdminProductManager";
 
 interface Props {
   onClose: () => void;
   onViewReceipt: (order: Order) => void;
 }
 
-type AdminTab = "orders" | "chat" | "security" | "settings" | "fraud" | "customers";
+type AdminTab = "orders" | "products" | "chat" | "security" | "settings" | "fraud" | "customers" | "announcements";
 
 export function AdminPanel({ onClose, onViewReceipt }: Props) {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
@@ -199,6 +210,13 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
   const [expandedLogOrderNo, setExpandedLogOrderNo] = useState<string | null>(null);
   const [manualBlockPhone, setManualBlockPhone] = useState("");
   const [manualBlockReason, setManualBlockReason] = useState("");
+
+  // Announcements & In-app Notifications State
+  const [announcementTitle, setAnnouncementTitle] = useState("");
+  const [announcementMsg, setAnnouncementMsg] = useState("");
+  const [announcementType, setAnnouncementType] = useState<"announcement" | "limited_offer">("announcement");
+  const [announcementFeedback, setAnnouncementFeedback] = useState<string | null>(null);
+  const [allAppNotifs, setAllAppNotifs] = useState(() => getAppNotifications());
 
   // Customer accounts & Admin user management state
   const [customers, setCustomers] = useState<CustomerAccount[]>([]);
@@ -579,6 +597,26 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
     setActiveChatMessages(getLiveChatMessages(activeChatPhone));
   };
 
+  const handleBroadcastAnnouncement = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!announcementTitle.trim() || !announcementMsg.trim()) return;
+    broadcastAdminAnnouncement({
+      title: announcementTitle,
+      message: announcementMsg,
+      type: announcementType,
+    });
+    setAnnouncementTitle("");
+    setAnnouncementMsg("");
+    setAnnouncementFeedback("✅ নোটিফিকেশন সফলভাবে সব ব্যবহারকারী ও ভিজিটরদের কাছে পাঠানো হয়েছে!");
+    setAllAppNotifs(getAppNotifications());
+    setTimeout(() => setAnnouncementFeedback(null), 3500);
+  };
+
+  const handleDeleteNotif = (id: string) => {
+    deleteAppNotification(id);
+    setAllAppNotifs(getAppNotifications());
+  };
+
   // Unlock Security Settings
   const handleVerifySecurity = (e: React.FormEvent) => {
     e.preventDefault();
@@ -935,6 +973,18 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
           </button>
 
           <button
+            onClick={() => setActiveTab("products")}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+              activeTab === "products"
+                ? "bg-gradient-to-r from-cyan-500 to-emerald-500 text-black shadow-md shadow-cyan-500/20"
+                : "text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 hover:bg-cyan-500/20"
+            }`}
+          >
+            <Package className="w-4 h-4" />
+            <span>🛍️ প্রোডাক্ট, অফার ও পেমেন্ট কন্ট্রোল</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab("chat")}
             className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
               activeTab === "chat"
@@ -985,6 +1035,21 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
           >
             <Settings className="w-4 h-4" />
             <span>শপ ও পেমেন্ট সেটিংস</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setAllAppNotifs(getAppNotifications());
+              setActiveTab("announcements");
+            }}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+              activeTab === "announcements"
+                ? "bg-cyan-500 text-black shadow-md shadow-cyan-500/20"
+                : "text-slate-400 hover:text-white hover:bg-slate-800"
+            }`}
+          >
+            <Megaphone className="w-4 h-4" />
+            <span>📢 নোটিফিকেশন ও অফার ঘোষণা</span>
           </button>
 
           <button
@@ -2343,6 +2408,73 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                     </div>
                   </div>
 
+                  {/* Quick Payment Method Enable/Disable inside Settings Tab as well */}
+                  <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <h4 className="text-xs font-extrabold text-emerald-300 flex items-center gap-1.5">
+                          <Power className="w-4 h-4 text-emerald-400" />
+                          <span>পেমেন্ট অপশন চালু / বন্ধ সিস্টেম (হঠাৎ সমস্যা হলে বন্ধ করুন)</span>
+                        </h4>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          কোনো পেমেন্ট গেটওয়েতে সমস্যা হলে এখান থেকে বন্ধ করে দিলে গ্রাহকরা চেকআউটে সেটি সিলেক্ট করতে পারবে না
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab("products")}
+                        className="px-3 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 text-[11px] font-bold transition cursor-pointer shrink-0"
+                      >
+                        প্রোডাক্ট ও অফার প্যানেল ➔
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {getPaymentOptions().map((pay) => (
+                        <div
+                          key={pay.id}
+                          className={`p-3 rounded-xl border flex flex-col gap-2 ${
+                            pay.isEnabled
+                              ? "bg-slate-900/90 border-emerald-500/30"
+                              : "bg-rose-950/30 border-rose-500/40"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <span className="font-bold text-white text-xs block">{pay.label}</span>
+                              <span
+                                className={`text-[10px] font-extrabold ${
+                                  pay.isEnabled ? "text-emerald-400" : "text-rose-400"
+                                }`}
+                              >
+                                {pay.isEnabled ? "● বর্তমানে চালু আছে" : "🚫 সাময়িকভাবে বন্ধ"}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                togglePaymentMethod(pay.id, !pay.isEnabled, pay.disabledReason);
+                                setSettingsSuccessMsg(
+                                  !pay.isEnabled
+                                    ? `✅ ${pay.label} আবার চালু করা হয়েছে!`
+                                    : `🚫 ${pay.label} সাময়িকভাবে বন্ধ করা হয়েছে!`
+                                );
+                                setTimeout(() => setSettingsSuccessMsg(""), 3000);
+                              }}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition cursor-pointer ${
+                                pay.isEnabled
+                                  ? "bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30"
+                                  : "bg-emerald-500 hover:bg-emerald-400 text-black"
+                              }`}
+                            >
+                              {pay.isEnabled ? "বন্ধ করুন" : "চালু করুন"}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
                   <div>
                     <label className="block text-xs font-semibold text-slate-300 mb-1">
                       অফিসিয়াল ফেসবুক পেজ লিংক (Facebook Review & Invite Link)
@@ -3037,6 +3169,160 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
               </div>
             </div>
           )}
+
+          {/* TAB 7: ANNOUNCEMENTS & LIMITED-TIME OFFERS BROADCAST */}
+          {activeTab === "announcements" && (
+            <div className="max-w-4xl mx-auto space-y-6">
+              <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-5">
+                <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
+                  <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center justify-center">
+                    <Megaphone className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-white">ইন-অ্যাপ নোটিফিকেশন ও অফার ব্রডকাস্ট</h3>
+                    <p className="text-xs text-slate-400">
+                      ওয়েবসাইটের হেডারে থাকা 🔔 নোটিফিকেশন বেল আইকনে গ্রাহকদের জন্য জরুরি ঘোষণা বা স্পেশাল অফার পাঠান
+                    </p>
+                  </div>
+                </div>
+
+                {/* Broadcast Form */}
+                <form onSubmit={handleBroadcastAnnouncement} className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-4">
+                  <h4 className="text-xs font-extrabold text-cyan-300 flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-cyan-400" />
+                    <span>নতুন নোটিফিকেশন বা অফার ঘোষণা তৈরি করুন</span>
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        নোটিফিকেশন টাইটেল (Title) *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={announcementTitle}
+                        onChange={(e) => setAnnouncementTitle(e.target.value)}
+                        placeholder="যেমন: 🔥 সীমিত সময়ের জন্য স্পেশাল অফার! অথবা ⚠️ জরুরি রক্ষণাবেক্ষণ"
+                        className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        ক্যাটাগরি / ধরন
+                      </label>
+                      <select
+                        value={announcementType}
+                        onChange={(e) => setAnnouncementType(e.target.value as any)}
+                        className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400 cursor-pointer"
+                      >
+                        <option value="announcement">📢 গুরুত্বপূর্ণ ঘোষণা (Announcement)</option>
+                        <option value="limited_offer">🔥 লিমিটেড টাইম অফার (Limited Offer)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      বিস্তারিত বার্তা (Message) *
+                    </label>
+                    <textarea
+                      required
+                      rows={3}
+                      value={announcementMsg}
+                      onChange={(e) => setAnnouncementMsg(e.target.value)}
+                      placeholder="বিস্তারিত লিখুন... যেমন: আজ রাত ১২টা পর্যন্ত যেকোনো কয়েন অর্ডারে আকর্ষণীয় ক্যাশব্যাক ও দ্রুততম ডেলিভারি!"
+                      className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400 resize-none"
+                    />
+                  </div>
+
+                  {announcementFeedback && (
+                    <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-500/50 text-emerald-300 text-xs font-bold flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span>{announcementFeedback}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black font-extrabold text-xs rounded-xl transition cursor-pointer shadow-lg shadow-cyan-500/20 flex items-center gap-2"
+                  >
+                    <Send className="w-4 h-4" />
+                    <span>📢 সবার নোটিফিকেশনে পাঠান (Broadcast Now)</span>
+                  </button>
+                </form>
+
+                {/* Active Notifications List */}
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-extrabold text-white flex items-center gap-1.5">
+                      <Bell className="w-4 h-4 text-cyan-400" />
+                      <span>বর্তমান নোটিফিকেশন তালিকা ({toBn(allAppNotifs.length)} টি)</span>
+                    </h4>
+                    <span className="text-[11px] text-slate-400">
+                      গ্রাহকরা তাদের হেডারের বেল আইকনে এগুলো দেখতে পান
+                    </span>
+                  </div>
+
+                  {allAppNotifs.length === 0 ? (
+                    <div className="p-8 text-center text-slate-500 text-xs bg-slate-950 rounded-2xl border border-slate-800">
+                      বর্তমানে কোনো নোটিফিকেশন নেই।
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {allAppNotifs.map((n) => (
+                        <div
+                          key={n.id}
+                          className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex items-start justify-between gap-3 text-xs"
+                        >
+                          <div className="space-y-1 min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {n.badge && (
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold border ${
+                                  n.badgeColor === "emerald"
+                                    ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
+                                    : n.badgeColor === "amber"
+                                    ? "bg-amber-500/20 text-amber-300 border-amber-500/30"
+                                    : n.badgeColor === "rose"
+                                    ? "bg-rose-500/20 text-rose-300 border-rose-500/30"
+                                    : "bg-cyan-500/20 text-cyan-300 border-cyan-500/30"
+                                }`}>
+                                  {n.badge}
+                                </span>
+                              )}
+                              <span className="text-white font-bold">{n.title}</span>
+                              <span className="text-slate-500 text-[10px]">
+                                • {new Date(n.createdAt).toLocaleString("bn-BD")}
+                              </span>
+                            </div>
+                            <p className="text-slate-300 text-[11px] leading-relaxed">{n.message}</p>
+                            {n.orderNo && (
+                              <span className="text-[10px] font-mono text-cyan-400 font-bold block">
+                                অর্ডার নম্বর: #{n.orderNo}
+                              </span>
+                            )}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteNotif(n.id)}
+                            className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition cursor-pointer shrink-0"
+                            title="মুছে ফেলুন"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 8: PRODUCTS, SECTIONS, OFFERS & PAYMENT CONTROL */}
+          {activeTab === "products" && <AdminProductManager />}
 
         </div>
       </main>
