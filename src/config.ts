@@ -144,36 +144,36 @@ export const PAYMENTS: PaymentMethod[] = [
   },
 ];
 
-// ১. রেগুলার কয়েন প্যাকেজসমূহ (ট্যাগ আপডেট: ১০৪০, ২১৩০ জনপ্রিয় এবং ৩২৫০, ৫৭০০, ১২৮০০ সেরা দাম)
+// ১. রেগুলার কয়েন প্যাকেজসমূহ (নতুন মূল্য তালিকা)
 export const REGULAR_PACKAGES: CoinPackage[] = [
-  { id: "p1", coins: 130, price: 165 },
-  { id: "p2", coins: 300, price: 350 },
-  { id: "p3", coins: 550, price: 630, tag: "জনপ্রিয়" },
-  { id: "p4", coins: 750, price: 840 },
-  { id: "p5", coins: 1040, price: 1130, tag: "জনপ্রিয়" },
-  { id: "p6", coins: 2130, price: 2200, tag: "জনপ্রিয়" },
-  { id: "p7", coins: 3250, price: 3250, tag: "সেরা দাম" },
-  { id: "p8", coins: 5700, price: 5350, tag: "সেরা দাম" },
-  { id: "p9", coins: 12800, price: 11400, tag: "সেরা দাম" },
+  { id: "p1", coins: 100, price: 140 },
+  { id: "p2", coins: 300, price: 370 },
+  { id: "p3", coins: 500, price: 600, tag: "জনপ্রিয়" },
+  { id: "p4", coins: 1000, price: 1100, tag: "জনপ্রিয়" },
+  { id: "p5", coins: 2000, price: 2050, tag: "জনপ্রিয়" },
+  { id: "p6", coins: 3000, price: 2980, tag: "সেরা দাম" },
+  { id: "p7", coins: 5000, price: 4700, tag: "সেরা দাম" },
+  { id: "p8", coins: 10000, price: 8900, tag: "সেরা দাম" },
+  { id: "p9", coins: 15000, price: 13100, tag: "সেরা দাম" },
 ];
 
-// ২. কম্বো কয়েন এর ২ টা প্যাক
+// ২. কম্বো কয়েন এর ২ টা প্যাক (নতুন মূল্য তালিকা)
 export const COIN_COMBOS: ComboPackage[] = [
   { 
     id: "c1", 
-    coins: 1300, 
-    price: 1420, 
-    parts: "550 + 750 Coins",
+    coins: 1500, 
+    price: 1620, 
+    parts: "1000 + 500 Coins",
     tag: "স্পেশাল কম্বো",
-    description: "দুটো কয়েন প্যাক একসাথে কম খরচে নিন"
+    description: "১৫০০ কয়েন (1000+500) স্পেশাল কম্বো অফার"
   },
   { 
     id: "c2", 
-    coins: 1790, 
-    price: 1900, 
-    parts: "750 + 1040 Coins",
+    coins: 2500, 
+    price: 2600, 
+    parts: "2000 + 500 Coins",
     tag: "বেশি সেভিংস",
-    description: "সবচেয়ে বেশি কয়েন সেভিংস কম্বো প্যাক"
+    description: "২৫০০ কয়েন (2000+500) সর্বোচ্চ সেভিংস কম্বো প্যাক"
   },
 ];
 

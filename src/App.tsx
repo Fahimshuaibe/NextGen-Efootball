@@ -104,6 +104,7 @@ import {
 } from "lucide-react";
 
 interface FormState {
+  device: "android" | "ios";
   serviceMethod: ServiceMethod;
   name: string;
   phone: string;
@@ -128,6 +129,7 @@ interface FormState {
 }
 
 const initialForm: FormState = {
+  device: "android",
   serviceMethod: "konami_login",
   name: "",
   phone: "",
@@ -417,14 +419,27 @@ export default function App() {
   }, [cart]);
 
   const addToCart = (item: Omit<CartItem, "quantity">) => {
+    if (form.device === "ios" && (item.category === "regular" || item.category === "combo")) {
+      alert("⚠️ iOS ডিভাইসে কয়েন দেওয়া বন্ধ আছে। আপনি শুধু প্লেয়ার প্যাক নিতে পারবেন।");
+      return;
+    }
+    const finalItem =
+      form.device === "ios" && item.category === "player_pack"
+        ? {
+            ...item,
+            coins: 0,
+            name: `${item.name.replace(/\+\s*\d+\s*(কয়েন|Coins)/gi, "").trim()} (iOS - শুধু প্লেয়ার)`,
+          }
+        : item;
+
     setCart((prev) => {
-      const existing = prev.find((i) => i.id === item.id);
+      const existing = prev.find((i) => i.id === finalItem.id);
       if (existing) {
         return prev.map((i) =>
-          i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i
+          i.id === finalItem.id ? { ...i, quantity: i.quantity + 1 } : i
         );
       }
-      return [...prev, { ...item, quantity: 1 }];
+      return [...prev, { ...finalItem, quantity: 1 }];
     });
   };
 
@@ -447,7 +462,20 @@ export default function App() {
   };
 
   const buyNow = (item: Omit<CartItem, "quantity">) => {
-    setCart([{ ...item, quantity: 1 }]);
+    if (form.device === "ios" && (item.category === "regular" || item.category === "combo")) {
+      alert("⚠️ iOS ডিভাইসে কয়েন দেওয়া বন্ধ আছে। আপনি শুধু প্লেয়ার প্যাক নিতে পারবেন।");
+      return;
+    }
+    const finalItem =
+      form.device === "ios" && item.category === "player_pack"
+        ? {
+            ...item,
+            coins: 0,
+            name: `${item.name.replace(/\+\s*\d+\s*(কয়েন|Coins)/gi, "").trim()} (iOS - শুধু প্লেয়ার)`,
+          }
+        : item;
+
+    setCart([{ ...finalItem, quantity: 1 }]);
     setOrderStep("step1_info");
     document.getElementById("order-section")?.scrollIntoView({ behavior: "smooth" });
   };
@@ -477,6 +505,15 @@ export default function App() {
   // Validate Step 1 (Konami ID/Pass + Name, Mobile & OTP Contact) and advance to Step 2 (Payment Grid)
   const handleNextToPaymentStep = () => {
     setFormError("");
+
+    if (form.device === "ios") {
+      const hasCoins = cart.some((i) => i.category === "regular" || i.category === "combo");
+      if (hasCoins) {
+        setFormError("⚠️ iOS ডিভাইসে কয়েন দেওয়া বন্ধ আছে। আপনি শুধু প্লেয়ার প্যাক নিতে পারবেন। কার্ট থেকে কয়েন প্যাক রিমুভ করুন।");
+        return;
+      }
+    }
+
     const step1Check = validateOrderStepOne({
       cartCount: cart.length,
       konamiIdOrEmail: form.konamiIdOrEmail,
@@ -1499,6 +1536,47 @@ export default function App() {
             {/* ==================== STAGE 1: KONAMI ID/PASS + NAME, MOBILE & OTP CONTACT ==================== */}
             {orderStep === "step1_info" && (
               <>
+                {/* DEVICE SELECTION: ANDROID / IOS */}
+                <div className="p-4 rounded-2xl bg-slate-950/90 border border-slate-800 space-y-3">
+                  <label className="block text-xs font-extrabold text-white">
+                    আপনার গেম ডিভাইস সিলেক্ট করুন (Device) *
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, device: "android" })}
+                      className={`p-3 rounded-xl border-2 text-center transition cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                        form.device === "android"
+                          ? "bg-emerald-950/60 border-emerald-400 text-emerald-300 shadow-lg shadow-emerald-500/10"
+                          : "bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700"
+                      }`}
+                    >
+                      <span className="text-sm font-black">🤖 Android</span>
+                      <span className="text-[10px] text-slate-300">কয়েন ও প্লেয়ার প্যাক দুটোই চালু</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form, device: "ios" })}
+                      className={`p-3 rounded-xl border-2 text-center transition cursor-pointer flex flex-col items-center justify-center gap-1 ${
+                        form.device === "ios"
+                          ? "bg-rose-950/60 border-rose-400 text-rose-300 shadow-lg shadow-rose-500/10"
+                          : "bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700"
+                      }`}
+                    >
+                      <span className="text-sm font-black">🍏 iOS / iPhone</span>
+                      <span className="text-[10px] text-slate-300">শুধু প্লেয়ার প্যাক (কয়েন বন্ধ)</span>
+                    </button>
+                  </div>
+
+                  {form.device === "ios" && (
+                    <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                      <span>ios ডিভাইস এ কয়েন দেওয়া বন্ধ আছে। আপনি শুধু প্লেয়ার প্যাক নিতে পারবেন (সাথে থাকা কয়েন শো করবে না)।</span>
+                    </div>
+                  )}
+                </div>
+
                 {/* 1. KONAMI ID & PASSWORD LOGIN FORM */}
                 <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-4">
                   <h3 className="text-xs sm:text-sm font-extrabold text-cyan-400">
