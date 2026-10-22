@@ -113,7 +113,9 @@ const DEFAULT_SHOP_SETTINGS: ShopSettings = {
   whatsappWebhookUrl: "",
   telegramBotToken: "",
   telegramChatId: "",
-  discordWebhookUrl: ""
+  discordWebhookUrl: "",
+  greenApiIdInstance: "",
+  greenApiApiToken: ""
 };
 
 export function getShopSettings(): ShopSettings {

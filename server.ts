@@ -152,6 +152,117 @@ async function startServer() {
     }
   });
 
+  // Auto-detect Telegram Chat ID from Bot Updates
+  app.post("/api/telegram-get-chat-id", async (req, res) => {
+    try {
+      const { botToken } = req.body || {};
+      if (!botToken || !botToken.trim()) {
+        return res.status(400).json({ ok: false, error: "Bot Token প্রদান করা আবশ্যক।" });
+      }
+
+      const updatesRes = await fetch(
+        `https://api.telegram.org/bot${encodeURIComponent(botToken.trim())}/getUpdates?limit=15`
+      );
+      const data = await updatesRes.json();
+
+      if (!data.ok) {
+        return res.status(200).json({
+          ok: false,
+          error: data.description || "টেলিগ্রাম Bot Token সঠিক নয়। দয়া করে সঠিক টোকেন দিন।",
+        });
+      }
+
+      const updates = data.result || [];
+      if (!Array.isArray(updates) || updates.length === 0) {
+        return res.status(200).json({
+          ok: false,
+          noMessages: true,
+          error: "আপনার বটে এখনো কোনো মেসেজ পাওয়া যায়নি। দয়া করে টেলিগ্রামে গিয়ে আপনার তৈরি করা বটে ঢুকুন এবং 'Start' বাটনে চাপ দিন (অথবা 'Hi' লিখে মেসেজ পাঠান)। তারপর এই বাটনে আবার চাপুন।",
+        });
+      }
+
+      // Find the last message with a chat id
+      let lastChat: any = null;
+      for (let i = updates.length - 1; i >= 0; i--) {
+        const u = updates[i];
+        const msg = u.message || u.edited_message || u.channel_post;
+        if (msg && msg.chat) {
+          lastChat = msg.chat;
+          break;
+        }
+      }
+
+      if (!lastChat || !lastChat.id) {
+        return res.status(200).json({
+          ok: false,
+          error: "চ্যাট আইডি পাওয়া যায়নি। দয়া করে বটে একটি মেসেজ পাঠিয়ে আবার চেষ্টা করুন।",
+        });
+      }
+
+      const displayName =
+        lastChat.first_name || lastChat.username || lastChat.title || "User";
+
+      return res.json({
+        ok: true,
+        chatId: String(lastChat.id),
+        username: displayName,
+      });
+    } catch (err: any) {
+      console.warn("Telegram getUpdates error:", err);
+      res.status(500).json({
+        ok: false,
+        error: err?.message || "সার্ভার থেকে টেলিগ্রামের সংযোগে সমস্যা হয়েছে।",
+      });
+    }
+  });
+
+  // Server-side Green-API (WhatsApp Alternative Gateway)
+  app.post("/api/notify-whatsapp-green", async (req, res) => {
+    try {
+      const { idInstance, apiTokenInstance, phone, message } = req.body || {};
+      if (!idInstance || !apiTokenInstance || !message) {
+        return res.status(400).json({
+          ok: false,
+          error: "Missing idInstance, apiTokenInstance, or message",
+        });
+      }
+
+      let cleanPhone = (phone || "01629802989").replace(/\D/g, "");
+      if (cleanPhone.startsWith("01")) {
+        cleanPhone = "88" + cleanPhone;
+      }
+
+      const url = `https://api.green-api.com/waInstance${encodeURIComponent(
+        idInstance.trim()
+      )}/sendMessage/${encodeURIComponent(apiTokenInstance.trim())}`;
+
+      const greenRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chatId: `${cleanPhone}@c.us`,
+          message,
+        }),
+      });
+
+      const data = await greenRes.json();
+      if (greenRes.ok && data.idMessage) {
+        return res.json({ ok: true, data });
+      } else {
+        return res.status(200).json({
+          ok: false,
+          error: data.message || "Green-API বার্তা পাঠাতে পারেনি। ক্রেডেনশিয়াল সঠিক কিনা যাচাই করুন।",
+        });
+      }
+    } catch (err: any) {
+      console.warn("Green-API proxy error:", err);
+      res.status(500).json({
+        ok: false,
+        error: err?.message || "Green-API সার্ভারে পৌঁছাতে সমস্যা হয়েছে।",
+      });
+    }
+  });
+
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({

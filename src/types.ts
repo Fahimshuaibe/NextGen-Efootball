@@ -206,6 +206,8 @@ export interface ShopSettings {
   telegramBotToken?: string;
   telegramChatId?: string;
   discordWebhookUrl?: string;
+  greenApiIdInstance?: string;
+  greenApiApiToken?: string;
 }
 
 export interface LiveChatMessage {

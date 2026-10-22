@@ -96,6 +96,8 @@ import {
   sendTestTelegramAlert,
   sendTestAdminEmailAlert,
   sendTestDiscordAlert,
+  autoDiscoverTelegramChatId,
+  sendTestGreenApiAlert,
   dispatchOrderStatusNotification,
 } from "../utils/autoNotify";
 import {
@@ -190,6 +192,9 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
   const [emailFeedback, setEmailFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testingDiscord, setTestingDiscord] = useState(false);
   const [discordFeedback, setDiscordFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [detectingChatId, setDetectingChatId] = useState(false);
+  const [testingGreenApi, setTestingGreenApi] = useState(false);
+  const [greenApiFeedback, setGreenApiFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
   const [expandedLogOrderNo, setExpandedLogOrderNo] = useState<string | null>(null);
   const [manualBlockPhone, setManualBlockPhone] = useState("");
   const [manualBlockReason, setManualBlockReason] = useState("");
@@ -2438,9 +2443,12 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <div>
-                          <label className="block text-xs font-bold text-sky-200 mb-1">
-                            Telegram Bot Token *
-                          </label>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs font-bold text-sky-200">
+                              Telegram Bot Token *
+                            </label>
+                            <span className="text-[10px] text-slate-400">@BotFather থেকে প্রাপ্ত</span>
+                          </div>
                           <input
                             type="text"
                             value={shopSettings.telegramBotToken || ""}
@@ -2453,9 +2461,43 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                         </div>
 
                         <div>
-                          <label className="block text-xs font-bold text-sky-200 mb-1">
-                            আপনার Telegram Chat ID *
-                          </label>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-xs font-bold text-sky-200">
+                              আপনার Telegram Chat ID *
+                            </label>
+                            <button
+                              type="button"
+                              disabled={detectingChatId || !shopSettings.telegramBotToken?.trim()}
+                              onClick={async () => {
+                                setDetectingChatId(true);
+                                setTelegramFeedback(null);
+                                const res = await autoDiscoverTelegramChatId(shopSettings.telegramBotToken || "");
+                                setDetectingChatId(false);
+                                if (res.ok && res.chatId) {
+                                  const updated = { ...shopSettings, telegramChatId: res.chatId };
+                                  setShopSettingsState(updated);
+                                  updateShopSettings(updated);
+                                  setTelegramFeedback({
+                                    ok: true,
+                                    msg: `🎉 আপনার Telegram আইডি (${res.username}: ${res.chatId}) সফলভাবে সেভ হয়েছে! টেস্ট মেসেজ পাঠানো হচ্ছে...`,
+                                  });
+                                  const testRes = await sendTestTelegramAlert(shopSettings.telegramBotToken || "", res.chatId);
+                                  setTelegramFeedback({
+                                    ok: testRes.ok,
+                                    msg: `🎉 চ্যাট আইডি পাওয়া গেছে (${res.username}: ${res.chatId}) এবং আপনার টেলিগ্রামে টেস্ট মেসেজ সফলভাবে পৌঁছেছে!`,
+                                  });
+                                } else {
+                                  setTelegramFeedback({
+                                    ok: false,
+                                    msg: res.error || "চ্যাট আইডি পাওয়া যায়নি। টেলিগ্রাম বটে 'Start' চাপ দিয়ে আবার চেষ্টা করুন।",
+                                  });
+                                }
+                              }}
+                              className="text-[10px] font-extrabold text-cyan-300 hover:text-cyan-200 underline cursor-pointer disabled:opacity-40"
+                            >
+                              {detectingChatId ? "শনাক্ত হচ্ছে..." : "🔍 ১-ক্লিকে অটোমেটিক বের করুন"}
+                            </button>
+                          </div>
                           <input
                             type="text"
                             value={shopSettings.telegramChatId || ""}
@@ -2487,7 +2529,10 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                         </div>
                       )}
 
-                      <div className="flex justify-end pt-1">
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                        <span className="text-[11px] text-slate-400">
+                          💡 পরামর্শ: Bot Token বসানোর পর আপনার বটে <b>Start</b> চাপুন এবং <b>"১-ক্লিকে অটোমেটিক বের করুন"</b> চাপলেই Chat ID নিজে নিজে বসে যাবে!
+                        </span>
                         <button
                           type="button"
                           disabled={testingTelegram}
@@ -2620,88 +2665,190 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                       )}
                     </div>
 
-                    {/* METHOD 4: WHATSAPP BOT (CALLMEBOT / WEBHOOK) */}
-                    <div className="p-4 rounded-2xl bg-emerald-950/20 border border-emerald-500/30 space-y-3">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <h4 className="text-xs sm:text-sm font-extrabold text-emerald-300 flex items-center gap-1.5">
-                            <MessageCircle className="w-4 h-4 text-emerald-400" />
-                            <span>WhatsApp বট (CallMeBot / Custom Webhook)</span>
-                          </h4>
-                          <p className="text-[11px] text-amber-300/90 mt-0.5">
-                            ⚠️ লক্ষ্য করুন: CallMeBot-এর পাবলিক সার্ভার মাঝে মাঝে ওভারলোড ("Server is full") হয়ে যায়। যদি CallMeBot-এ সমস্যা হয়, তবে ওপরের <b>Telegram Bot</b> ব্যবহার করুন।
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-[11px] font-bold text-emerald-200 mb-1">
-                            আপনার WhatsApp নম্বর
-                          </label>
-                          <input
-                            type="tel"
-                            value={shopSettings.autoWhatsappPhone || shopSettings.whatsapp || "01629802989"}
-                            onChange={(e) =>
-                              setShopSettingsState({ ...shopSettings, autoWhatsappPhone: e.target.value })
-                            }
-                            placeholder="01629802989"
-                            className="w-full px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-xs focus:outline-none focus:border-emerald-400"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-bold text-emerald-200 mb-1">
-                            WhatsApp Bot API Key (CallMeBot)
-                          </label>
-                          <input
-                            type="text"
-                            value={shopSettings.callmebotApiKey || ""}
-                            onChange={(e) =>
-                              setShopSettingsState({ ...shopSettings, callmebotApiKey: e.target.value })
-                            }
-                            placeholder="API Key লিখুন..."
-                            className="w-full px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-xl text-emerald-300 font-mono text-xs focus:outline-none focus:border-emerald-400"
-                          />
-                        </div>
-                      </div>
-
+                    {/* METHOD 4: WHATSAPP NOTIFICATION SYSTEMS */}
+                    <div className="p-4 rounded-2xl bg-emerald-950/20 border border-emerald-500/40 space-y-4">
                       <div>
-                        <label className="block text-[10px] font-semibold text-slate-400 mb-1">
-                          কাস্টম WhatsApp Webhook URL (ঐচ্ছিক - Green-API / UltraMsg)
-                        </label>
-                        <input
-                          type="url"
-                          value={shopSettings.whatsappWebhookUrl || ""}
-                          onChange={(e) =>
-                            setShopSettingsState({ ...shopSettings, whatsappWebhookUrl: e.target.value })
-                          }
-                          placeholder="https://..."
-                          className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-300 font-mono text-xs focus:outline-none focus:border-emerald-400"
-                        />
+                        <h4 className="text-sm font-black text-emerald-300 flex items-center gap-1.5">
+                          <MessageCircle className="w-4 h-4 text-emerald-400" />
+                          <span>WhatsApp অর্ডার নোটিফিকেশন সিস্টেম</span>
+                        </h4>
+                        <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                          WhatsApp-এ স্বয়ংক্রিয় মেসেজ পাঠানোর জন্য নিচের ২টি বিকল্প সিস্টেম রাখা হয়েছে:
+                        </p>
                       </div>
 
-                      <div className="flex justify-end pt-1">
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            updateShopSettings(shopSettings);
-                            const ok = await sendTestAutoWhatsappAlert(
-                              shopSettings.autoWhatsappPhone || shopSettings.whatsapp,
-                              shopSettings.callmebotApiKey || "",
-                              shopSettings.whatsappWebhookUrl
-                            );
-                            if (ok) {
-                              setSettingsSuccessMsg("✅ WhatsApp টেস্ট রিকোয়েস্ট পাঠানো হয়েছে!");
-                            } else {
-                              setSettingsSuccessMsg("⚠️ CallMeBot সার্ভার ওভারলোড বা কী অনুপস্থিত। Telegram Bot ব্যবহার করুন।");
+                      {/* WhatsApp System A: Green-API (Dedicated WhatsApp Gateway - No "Server Full" Issues) */}
+                      <div className="p-3.5 rounded-xl bg-slate-950 border border-emerald-500/30 space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-extrabold text-emerald-300">
+                            🟢 বিকল্প ১: Green-API (স্থায়ী WhatsApp গেটওয়ে - কোনো সার্ভার ফুল সমস্যা নেই)
+                          </span>
+                          <a
+                            href="https://green-api.com"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[10px] text-cyan-300 underline font-semibold flex items-center gap-1"
+                          >
+                            <span>green-api.com-এ ফ্রি সাইন আপ</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          Green-API আপনার নিজের WhatsApp নম্বরের সাথে QR কোড স্ক্যান করে সরাসরি সংযুক্ত হয়, তাই CallMeBot-এর মতো "Server is full" বা লিমিটেশন থাকে না।
+                        </p>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1">
+                          <div>
+                            <label className="block text-[11px] font-bold text-emerald-200 mb-1">
+                              Green-API IdInstance
+                            </label>
+                            <input
+                              type="text"
+                              value={shopSettings.greenApiIdInstance || ""}
+                              onChange={(e) =>
+                                setShopSettingsState({ ...shopSettings, greenApiIdInstance: e.target.value.trim() })
+                              }
+                              placeholder="যেমন: 1101xxxxxx"
+                              className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-emerald-200 font-mono text-xs focus:outline-none focus:border-emerald-400"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] font-bold text-emerald-200 mb-1">
+                              Green-API ApiTokenInstance
+                            </label>
+                            <input
+                              type="text"
+                              value={shopSettings.greenApiApiToken || ""}
+                              onChange={(e) =>
+                                setShopSettingsState({ ...shopSettings, greenApiApiToken: e.target.value.trim() })
+                              }
+                              placeholder="যেমন: c94b7e8d..."
+                              className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-emerald-200 font-mono text-xs focus:outline-none focus:border-emerald-400"
+                            />
+                          </div>
+                        </div>
+
+                        {greenApiFeedback && (
+                          <div
+                            className={`p-2 rounded-lg text-xs font-semibold flex items-center justify-between ${
+                              greenApiFeedback.ok
+                                ? "bg-emerald-950/80 border border-emerald-500/50 text-emerald-300"
+                                : "bg-rose-950/80 border border-rose-500/50 text-rose-300"
+                            }`}
+                          >
+                            <span>{greenApiFeedback.msg}</span>
+                            <button
+                              type="button"
+                              onClick={() => setGreenApiFeedback(null)}
+                              className="text-slate-400 hover:text-white ml-2 text-xs"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        )}
+
+                        <div className="flex justify-end pt-1">
+                          <button
+                            type="button"
+                            disabled={testingGreenApi}
+                            onClick={async () => {
+                              updateShopSettings(shopSettings);
+                              setTestingGreenApi(true);
+                              setGreenApiFeedback(null);
+                              const res = await sendTestGreenApiAlert(
+                                shopSettings.greenApiIdInstance || "",
+                                shopSettings.greenApiApiToken || "",
+                                shopSettings.autoWhatsappPhone || shopSettings.whatsapp || "01629802989"
+                              );
+                              setTestingGreenApi(false);
+                              setGreenApiFeedback({ ok: res.ok, msg: res.message });
+                            }}
+                            className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer transition shadow disabled:opacity-50"
+                          >
+                            {testingGreenApi ? "পাঠানো হচ্ছে..." : "🔔 টেস্ট Green-API WhatsApp"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* WhatsApp System B: CallMeBot / Custom Webhook (Public Bot) */}
+                      <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2.5">
+                        <div className="text-xs font-bold text-slate-300">
+                          🟡 বিকল্প ২: CallMeBot ফ্রি পাবলিক বট (যদি তাদের সার্ভার ফ্রি থাকে)
+                        </div>
+                        <p className="text-[10px] text-amber-300/80">
+                          ⚠️ নোট: CallMeBot-এর পাবলিক সার্ভারে বিশ্বের সবাই একসাথে মেসেজ দেওয়ায় এটি প্রায়ই "Server is full" দেখায়। কাজ না করলে Green-API বা Telegram Bot ব্যবহার করুন।
+                        </p>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-300 mb-1">
+                              আপনার WhatsApp নম্বর
+                            </label>
+                            <input
+                              type="tel"
+                              value={shopSettings.autoWhatsappPhone || shopSettings.whatsapp || "01629802989"}
+                              onChange={(e) =>
+                                setShopSettingsState({ ...shopSettings, autoWhatsappPhone: e.target.value })
+                              }
+                              placeholder="01629802989"
+                              className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-xs focus:outline-none focus:border-emerald-400"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-300 mb-1">
+                              WhatsApp Bot API Key (CallMeBot)
+                            </label>
+                            <input
+                              type="text"
+                              value={shopSettings.callmebotApiKey || ""}
+                              onChange={(e) =>
+                                setShopSettingsState({ ...shopSettings, callmebotApiKey: e.target.value })
+                              }
+                              placeholder="API Key..."
+                              className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-emerald-300 font-mono text-xs focus:outline-none focus:border-emerald-400"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-semibold text-slate-400 mb-1">
+                            কাস্টম WhatsApp Webhook URL (যদি অন্য কোনো গেটওয়ে ব্যবহার করেন)
+                          </label>
+                          <input
+                            type="url"
+                            value={shopSettings.whatsappWebhookUrl || ""}
+                            onChange={(e) =>
+                              setShopSettingsState({ ...shopSettings, whatsappWebhookUrl: e.target.value })
                             }
-                            setTimeout(() => setSettingsSuccessMsg(""), 5000);
-                          }}
-                          className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-emerald-500/30 text-emerald-300 font-bold text-xs cursor-pointer transition"
-                        >
-                          🔔 টেস্ট WhatsApp
-                        </button>
+                            placeholder="https://..."
+                            className="w-full px-3.5 py-2 bg-slate-900 border border-slate-800 rounded-xl text-slate-300 font-mono text-xs focus:outline-none focus:border-emerald-400"
+                          />
+                        </div>
+
+                        <div className="flex justify-end pt-1">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              updateShopSettings(shopSettings);
+                              const ok = await sendTestAutoWhatsappAlert(
+                                shopSettings.autoWhatsappPhone || shopSettings.whatsapp,
+                                shopSettings.callmebotApiKey || "",
+                                shopSettings.whatsappWebhookUrl
+                              );
+                              if (ok) {
+                                setSettingsSuccessMsg("✅ WhatsApp টেস্ট রিকোয়েস্ট পাঠানো হয়েছে!");
+                              } else {
+                                setSettingsSuccessMsg("⚠️ CallMeBot সার্ভার ওভারলোড। অনুগ্রহ করে Telegram Bot অথবা Green-API ব্যবহার করুন।");
+                              }
+                              setTimeout(() => setSettingsSuccessMsg(""), 5000);
+                            }}
+                            className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-bold text-xs cursor-pointer transition"
+                          >
+                            🔔 টেস্ট CallMeBot
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>

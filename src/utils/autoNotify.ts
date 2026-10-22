@@ -190,13 +190,33 @@ export async function sendAutomaticAdminOrderAlert(order: Order): Promise<{
     }
   }
 
-  // 4. WhatsApp Bot (CallMeBot / Custom Webhook) as optional extra
+  // 4. WhatsApp Option A: Green-API (Dedicated WhatsApp Gateway - No CallMeBot Server Limits)
+  if (settings.greenApiIdInstance?.trim() && settings.greenApiApiToken?.trim()) {
+    try {
+      const res = await fetch("/api/notify-whatsapp-green", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          idInstance: settings.greenApiIdInstance.trim(),
+          apiTokenInstance: settings.greenApiApiToken.trim(),
+          phone: settings.autoWhatsappPhone || settings.whatsapp || "01629802989",
+          message,
+        }),
+      });
+      const gData = await res.json();
+      if (gData.ok) whatsappSent = true;
+    } catch (err) {
+      console.warn("Green-API WhatsApp alert error:", err);
+    }
+  }
+
+  // 5. WhatsApp Option B: CallMeBot Free WhatsApp API (as optional fallback)
   const targetWaPhone = formatBdWhatsappForUrl(
     settings.autoWhatsappPhone || settings.whatsapp || "01629802989"
   );
   const apiKey = (settings.callmebotApiKey || "").trim();
 
-  if (targetWaPhone && apiKey) {
+  if (!whatsappSent && targetWaPhone && apiKey) {
     try {
       const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(
         targetWaPhone
@@ -208,6 +228,7 @@ export async function sendAutomaticAdminOrderAlert(order: Order): Promise<{
     }
   }
 
+  // 6. Custom WhatsApp Webhook URL (if configured)
   if (settings.whatsappWebhookUrl && settings.whatsappWebhookUrl.trim()) {
     try {
       await fetch(settings.whatsappWebhookUrl.trim(), {
@@ -228,6 +249,70 @@ export async function sendAutomaticAdminOrderAlert(order: Order): Promise<{
   }
 
   return { telegramSent, emailSent, whatsappSent, discordSent };
+}
+
+/**
+ * Automatically discovers the user's Chat ID from their bot's recent updates
+ */
+export async function autoDiscoverTelegramChatId(
+  botToken: string
+): Promise<{ ok: boolean; chatId?: string; username?: string; error?: string }> {
+  const token = botToken.trim();
+  if (!token) {
+    return { ok: false, error: "আগে Bot Token ঘরে আপনার টোকেনটি পেস্ট করুন।" };
+  }
+
+  try {
+    const res = await fetch("/api/telegram-get-chat-id", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ botToken: token }),
+    });
+    const data = await res.json();
+    return data;
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "সার্ভার সংযোগে সমস্যা হয়েছে।" };
+  }
+}
+
+/**
+ * Sends a test WhatsApp notification via Green-API
+ */
+export async function sendTestGreenApiAlert(
+  idInstance: string,
+  apiToken: string,
+  phone: string
+): Promise<{ ok: boolean; message: string }> {
+  const id = idInstance.trim();
+  const token = apiToken.trim();
+  if (!id || !token) {
+    return { ok: false, message: "দয়া করে Green-API IdInstance এবং ApiToken উভয়টি দিন।" };
+  }
+
+  const testMsg = [
+    `✅ *NextGen Efootball Green-API WhatsApp সফলভাবে সংযুক্ত হয়েছে!*`,
+    `এখন থেকে ওয়েবসাইটে যেকোনো অর্ডার আসলে সরাসরি আপনার এই WhatsApp-এ নোটিফিকেশন চলে আসবে।`,
+  ].join("\n");
+
+  try {
+    const res = await fetch("/api/notify-whatsapp-green", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        idInstance: id,
+        apiTokenInstance: token,
+        phone: phone || "01629802989",
+        message: testMsg,
+      }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      return { ok: true, message: "✅ Green-API WhatsApp টেস্ট মেসেজ সফলভাবে পৌঁছেছে!" };
+    }
+    return { ok: false, message: `❌ Green-API ত্রুটি: ${data.error || "মেসেজ পাঠানো যায়নি।"}` };
+  } catch (err: any) {
+    return { ok: false, message: `❌ নেটওয়ার্ক সমস্যা: ${err?.message || "ব্যর্থ হয়েছে"}` };
+  }
 }
 
 /**
