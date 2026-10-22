@@ -58,6 +58,7 @@ export type NotificationType =
   | 'order_processing'
   | 'order_completed'
   | 'order_cancelled'
+  | 'order_updated'
   | 'announcement'
   | 'limited_offer';
 
@@ -245,6 +246,7 @@ export interface CustomerAccount {
   googleConnected?: boolean;
   emailVerified?: boolean;
   createdAt?: string;
+  lastActiveAt?: string;
   phone: string;
   name: string;
   totalOrders: number;

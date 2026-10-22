@@ -1,0 +1,34 @@
+{
+  "entities": {
+    "AppStateDoc": {
+      "title": "AppStateDoc",
+      "description": "Persisted application state document for store settings, catalog sections, catalog products, payment options, orders, customers, and notifications.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Unique state key identifier",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "payloadJson": {
+          "type": "string",
+          "description": "Serialized state payload",
+          "maxLength": 900000
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update",
+          "maxLength": 64
+        }
+      },
+      "required": ["key", "payloadJson", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/app_state/{stateKey}": {
+      "schema": { "$ref": "#/entities/AppStateDoc" },
+      "description": "Stores persistent store configuration, products, offers, payment methods, orders, and notifications."
+    }
+  }
+}

@@ -12,7 +12,8 @@ import {
   AppNotification,
   CatalogProduct,
   CatalogSection,
-  PaymentOptionConfig
+  PaymentOptionConfig,
+  CartItem
 } from "../types";
 import { triggerDesktopNotification, playOrderNotificationSound } from "./notification";
 import { SITE, PAYMENTS } from "../config";
@@ -21,6 +22,11 @@ import {
   computeOrderOwnershipSignature,
   verifyOrderUserRelationship,
 } from "./orderNotification";
+import {
+  saveCloudStateKey,
+  loadCloudStateKey,
+  subscribeCloudStateKey,
+} from "../firebase";
 
 const STORAGE_KEY = "nextgen_efootball_orders_v2";
 const ADMIN_STATUS_KEY = "nextgen_admin_online_status";
@@ -35,6 +41,58 @@ const LIVE_CHAT_KEY = "nextgen_live_chat_messages_v1";
 const NOTIFICATION_LOGS_KEY = "nextgen_order_notification_logs_v1";
 const APP_NOTIFICATIONS_KEY = "nextgen_app_notifications_v1";
 const DELETED_CUSTOMERS_KEY = "nextgen_deleted_customers_v1";
+const CATALOG_SECTIONS_KEY = "nextgen_catalog_sections_v3";
+const CATALOG_PRODUCTS_KEY = "nextgen_catalog_products_v3";
+const PAYMENT_OPTIONS_KEY = "nextgen_payment_options_v3";
+
+const KEY_EVENT_MAP: Record<string, string> = {
+  [STORAGE_KEY]: "nextgen_orders_updated",
+  [SHOP_SETTINGS_KEY]: "nextgen_shop_settings_updated",
+  [CATALOG_SECTIONS_KEY]: "nextgen_catalog_sections_updated",
+  [CATALOG_PRODUCTS_KEY]: "nextgen_catalog_products_updated",
+  [PAYMENT_OPTIONS_KEY]: "nextgen_payment_options_updated",
+  [REGISTERED_USERS_KEY]: "nextgen_user_account_updated",
+  [BLOCKED_USERS_KEY]: "nextgen_blocked_users_updated",
+  [FAILED_STRIKES_KEY]: "nextgen_blocked_users_updated",
+  [ADMIN_SECURITY_KEY]: "nextgen_orders_updated",
+  [APP_NOTIFICATIONS_KEY]: "nextgen_app_notifications_changed",
+  [DELETED_CUSTOMERS_KEY]: "nextgen_orders_updated",
+  [ADMIN_STATUS_KEY]: "nextgen_admin_status_changed",
+  [NOTIFICATION_LOGS_KEY]: "nextgen_notification_logs_updated",
+};
+
+function persistKey(key: string, value: any, customEventName?: string, eventDetail?: any): void {
+  try {
+    const serialized = typeof value === "string" ? value : JSON.stringify(value);
+    localStorage.setItem(key, serialized);
+  } catch (err) {
+    console.error(`Failed to write ${key} to localStorage`, err);
+  }
+
+  // 1. Save to Express Server persistent disk store (/api/state)
+  if (typeof window !== "undefined") {
+    fetch("/api/state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, value }),
+    }).catch(() => {});
+  }
+
+  // 2. Save to Firebase Firestore cloud database
+  saveCloudStateKey(key, value).catch(() => {});
+
+  // 3. Dispatch event
+  if (typeof window !== "undefined") {
+    const evtName = customEventName || KEY_EVENT_MAP[key];
+    if (evtName) {
+      if (eventDetail !== undefined) {
+        window.dispatchEvent(new CustomEvent(evtName, { detail: eventDetail }));
+      } else {
+        window.dispatchEvent(new Event(evtName));
+      }
+    }
+  }
+}
 
 function getDeletedCustomerPhones(): Set<string> {
   try {
@@ -47,11 +105,7 @@ function getDeletedCustomerPhones(): Set<string> {
 }
 
 function saveDeletedCustomerPhones(set: Set<string>): void {
-  try {
-    localStorage.setItem(DELETED_CUSTOMERS_KEY, JSON.stringify(Array.from(set)));
-  } catch {
-    // ignore
-  }
+  persistKey(DELETED_CUSTOMERS_KEY, Array.from(set));
 }
 
 export function isAdminSessionAuthorized(): boolean {
@@ -66,19 +120,16 @@ export function isAdminSessionAuthorized(): boolean {
 export function getAdminOnlineStatus(): boolean {
   try {
     const val = localStorage.getItem(ADMIN_STATUS_KEY);
-    return val === null ? true : val === "true";
+    if (val === null) return true;
+    if (val === "true" || val === "false") return val === "true";
+    return Boolean(JSON.parse(val));
   } catch {
     return true;
   }
 }
 
 export function setAdminOnlineStatus(isOnline: boolean): void {
-  try {
-    localStorage.setItem(ADMIN_STATUS_KEY, isOnline ? "true" : "false");
-    window.dispatchEvent(new CustomEvent("nextgen_admin_status_changed", { detail: isOnline }));
-  } catch (err) {
-    console.error("Failed to save admin status", err);
-  }
+  persistKey(ADMIN_STATUS_KEY, isOnline ? "true" : "false", "nextgen_admin_status_changed", isOnline);
 }
 
 // ===== 2. ADMIN PASSWORD & SECURITY CREDENTIALS =====
@@ -93,10 +144,9 @@ export function getAdminSecurityConfig(): AdminSecurityConfig {
   try {
     const raw = localStorage.getItem(ADMIN_SECURITY_KEY);
     if (!raw) {
-      localStorage.setItem(ADMIN_SECURITY_KEY, JSON.stringify(DEFAULT_SECURITY_CONFIG));
       return DEFAULT_SECURITY_CONFIG;
     }
-    return JSON.parse(raw);
+    return { ...DEFAULT_SECURITY_CONFIG, ...JSON.parse(raw) };
   } catch {
     return DEFAULT_SECURITY_CONFIG;
   }
@@ -109,7 +159,7 @@ export function updateAdminSecurityConfig(newConfig: Partial<AdminSecurityConfig
     ...newConfig,
     updatedAt: new Date().toISOString()
   };
-  localStorage.setItem(ADMIN_SECURITY_KEY, JSON.stringify(updated));
+  persistKey(ADMIN_SECURITY_KEY, updated);
   return updated;
 }
 
@@ -146,13 +196,11 @@ export function getShopSettings(): ShopSettings {
   try {
     const raw = localStorage.getItem(SHOP_SETTINGS_KEY);
     if (!raw) {
-      localStorage.setItem(SHOP_SETTINGS_KEY, JSON.stringify(DEFAULT_SHOP_SETTINGS));
       return DEFAULT_SHOP_SETTINGS;
     }
     const parsed = JSON.parse(raw);
     if (parsed.noticeText && parsed.noticeText.includes("রেফার")) {
       parsed.noticeText = DEFAULT_SHOP_SETTINGS.noticeText;
-      localStorage.setItem(SHOP_SETTINGS_KEY, JSON.stringify({ ...DEFAULT_SHOP_SETTINGS, ...parsed }));
     }
     return { ...DEFAULT_SHOP_SETTINGS, ...parsed };
   } catch {
@@ -163,8 +211,7 @@ export function getShopSettings(): ShopSettings {
 export function updateShopSettings(updates: Partial<ShopSettings>): ShopSettings {
   const current = getShopSettings();
   const updated = { ...current, ...updates };
-  localStorage.setItem(SHOP_SETTINGS_KEY, JSON.stringify(updated));
-  window.dispatchEvent(new CustomEvent("nextgen_shop_settings_updated", { detail: updated }));
+  persistKey(SHOP_SETTINGS_KEY, updated, "nextgen_shop_settings_updated", updated);
   return updated;
 }
 
@@ -218,20 +265,17 @@ export function blockUserManual(phone: string, reason: string): void {
     blockedAt: new Date().toISOString(),
     failedStrikes: count
   });
-  localStorage.setItem(BLOCKED_USERS_KEY, JSON.stringify(list));
-  window.dispatchEvent(new Event("nextgen_blocked_users_updated"));
+  persistKey(BLOCKED_USERS_KEY, list, "nextgen_blocked_users_updated");
 }
 
 export function unblockUser(phone: string): void {
   const key = normalizePhoneKey(phone);
   const list = getBlockedUsers().filter(b => normalizePhoneKey(b.phone) !== key);
-  localStorage.setItem(BLOCKED_USERS_KEY, JSON.stringify(list));
+  persistKey(BLOCKED_USERS_KEY, list);
   
   const strikes = getStrikesMap();
   delete strikes[key];
-  localStorage.setItem(FAILED_STRIKES_KEY, JSON.stringify(strikes));
-
-  window.dispatchEvent(new Event("nextgen_blocked_users_updated"));
+  persistKey(FAILED_STRIKES_KEY, strikes, "nextgen_blocked_users_updated");
 }
 
 export function recordFailedStrike(phone: string, reason: string): { strikes: number; blocked: boolean } {
@@ -239,7 +283,7 @@ export function recordFailedStrike(phone: string, reason: string): { strikes: nu
   const strikes = getStrikesMap();
   const current = (strikes[key] || 0) + 1;
   strikes[key] = current;
-  localStorage.setItem(FAILED_STRIKES_KEY, JSON.stringify(strikes));
+  persistKey(FAILED_STRIKES_KEY, strikes);
 
   let blocked = false;
   if (current >= 3) {
@@ -350,7 +394,6 @@ export function getRegisteredUsers(): RegisteredUserAccount[] {
   try {
     const raw = localStorage.getItem(REGISTERED_USERS_KEY);
     if (!raw) {
-      localStorage.setItem(REGISTERED_USERS_KEY, JSON.stringify(INITIAL_DEMO_USERS));
       return INITIAL_DEMO_USERS;
     }
     return JSON.parse(raw);
@@ -360,12 +403,7 @@ export function getRegisteredUsers(): RegisteredUserAccount[] {
 }
 
 export function saveRegisteredUsers(users: RegisteredUserAccount[]): void {
-  try {
-    localStorage.setItem(REGISTERED_USERS_KEY, JSON.stringify(users));
-    window.dispatchEvent(new Event("nextgen_user_account_updated"));
-  } catch (err) {
-    console.error("Failed to save registered users", err);
-  }
+  persistKey(REGISTERED_USERS_KEY, users, "nextgen_user_account_updated");
 }
 
 export function getActiveUserAccount(): RegisteredUserAccount | null {
@@ -752,8 +790,7 @@ export function deleteCustomerAccount(params: {
         if (normPhone && o.phone && normalizePhoneKey(o.phone) === normPhone) return false;
         return true;
       });
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(remainingOrders));
-      window.dispatchEvent(new Event("nextgen_orders_updated"));
+      persistKey(STORAGE_KEY, remainingOrders, "nextgen_orders_updated");
     } catch (err) {
       console.error("Failed to delete customer orders", err);
     }
@@ -797,6 +834,16 @@ export function getCustomerAccount(phoneOrIdentifier: string): CustomerAccount {
   const totalSpent = completed.reduce((sum, o) => sum + o.price, 0);
   const latestName = matchedUser?.name || orders[0]?.name || "গ্রাহক";
 
+  // Compute Last Active timestamp across all orders and account creation
+  let latestActiveMs = matchedUser?.createdAt ? new Date(matchedUser.createdAt).getTime() : 0;
+  orders.forEach(o => {
+    const t = new Date(o.statusUpdatedAt || o.time).getTime();
+    if (!isNaN(t) && t > latestActiveMs) {
+      latestActiveMs = t;
+    }
+  });
+  const lastActiveAt = latestActiveMs > 0 ? new Date(latestActiveMs).toISOString() : undefined;
+
   const refStats = getReferralStats(effectivePhone);
 
   return {
@@ -807,6 +854,7 @@ export function getCustomerAccount(phoneOrIdentifier: string): CustomerAccount {
     googleConnected: matchedUser?.googleConnected,
     emailVerified: matchedUser?.emailVerified,
     createdAt: matchedUser?.createdAt,
+    lastActiveAt,
     phone: effectivePhone,
     name: latestName,
     totalOrders: orders.length,
@@ -971,7 +1019,7 @@ const INITIAL_DEMO_ORDERS: Order[] = [
     trxId: "7H3L9J2N4V",
     status: "pending",
     referredBy: "01711223344",
-    customerNote: "আমার হোয়াটসঅ্যাপ নেই, ফেসবুক বা ওয়েবসাইটের লাইভ চ্যাটে যোগাযোগ করবেন প্লিজ।"
+    customerNote: "আমার হোয়াটসঅ্যাপ নেই, ফেসবুকে যোগাযোগ করবেন প্লিজ।"
   }
 ];
 
@@ -979,7 +1027,6 @@ export function getOrders(): Order[] {
   try {
     const data = localStorage.getItem(STORAGE_KEY);
     if (!data) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_DEMO_ORDERS));
       return INITIAL_DEMO_ORDERS;
     }
     return JSON.parse(data);
@@ -1029,7 +1076,7 @@ export function saveOrder(order: Order): void {
     };
 
     const updated = [enrichedOrder, ...orders.filter(o => o.orderNo !== enrichedOrder.orderNo)];
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    persistKey(STORAGE_KEY, updated, "nextgen_orders_updated", enrichedOrder);
     
     // Automatically set active customer phone
     if (enrichedOrder.phone) {
@@ -1070,8 +1117,6 @@ export function saveOrder(order: Order): void {
         console.error("Failed to update offer quota count", err);
       }
     }
-
-    window.dispatchEvent(new CustomEvent("nextgen_orders_updated", { detail: enrichedOrder }));
     
     // Trigger desktop notification & sound
     triggerDesktopNotification(
@@ -1181,13 +1226,12 @@ export function updateOrderStatus(
     ...(adminNotes !== undefined ? { adminNotes } : {})
   };
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(orders));
+  persistKey(STORAGE_KEY, orders, "nextgen_orders_updated");
 
   if (oldStatus !== status) {
     notifyOrderStatusInApp(orders[idx], status, adminNotes);
   }
 
-  window.dispatchEvent(new Event("nextgen_orders_updated"));
   return orders[idx];
 }
 
@@ -1225,21 +1269,101 @@ export function updateOrderDetails(orderNo: string, updates: Partial<Order>): Or
       : {}),
   };
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(orders));
+  persistKey(STORAGE_KEY, orders, "nextgen_orders_updated");
 
   if (statusChanged && updates.status) {
     notifyOrderStatusInApp(orders[idx], updates.status, updates.adminNotes);
   }
 
-  window.dispatchEvent(new Event("nextgen_orders_updated"));
+  return orders[idx];
+}
+
+/**
+ * Allows Admin to edit the ordered products/items of an existing order
+ * (e.g., removing unwanted items, changing quantities/prices, or replacing products).
+ * Sends an IN-APP WEBSITE NOTIFICATION ONLY (no email).
+ */
+export function updateOrderItems(
+  orderNo: string,
+  updatedItems: CartItem[],
+  adminNote?: string
+): Order | undefined {
+  const orders = getOrders();
+  const idx = orders.findIndex(o => o.orderNo === orderNo);
+  if (idx === -1 || updatedItems.length === 0) return undefined;
+
+  const nowIso = new Date().toISOString();
+  const newPrice = updatedItems.reduce(
+    (sum, item) => sum + Number(item.price || 0) * (Number(item.quantity) || 1),
+    0
+  );
+  const newCoins = updatedItems.reduce(
+    (sum, item) => sum + (Number(item.coins) || 0) * (Number(item.quantity) || 1),
+    0
+  );
+  const newPackageName = updatedItems
+    .map(i => ((i.quantity || 1) > 1 ? `${i.name} × ${i.quantity}` : i.name))
+    .join(" + ");
+
+  const prevHistory: OrderStatusHistoryEntry[] = orders[idx].statusHistory || [
+    {
+      status: orders[idx].status,
+      updatedAt: orders[idx].time,
+      updatedBy: "customer",
+    },
+  ];
+
+  const noteText =
+    adminNote?.trim() ||
+    `অর্ডারের প্রোডাক্ট এডিট করা হয়েছে: ${newPackageName} (৳${toBn(newPrice)})`;
+
+  orders[idx] = {
+    ...orders[idx],
+    items: updatedItems,
+    packageName: newPackageName,
+    price: newPrice,
+    coins: newCoins,
+    statusUpdatedAt: nowIso,
+    adminNotes: adminNote?.trim() || orders[idx].adminNotes,
+    statusHistory: [
+      ...prevHistory,
+      {
+        status: orders[idx].status,
+        updatedAt: nowIso,
+        updatedBy: "admin",
+        note: noteText,
+      },
+    ],
+  };
+
+  persistKey(STORAGE_KEY, orders, "nextgen_orders_updated");
+
+  // Send website IN-APP notification ONLY (no email)
+  saveAppNotification({
+    id: `notif_${orderNo}_edited_${Date.now()}`,
+    type: "order_updated",
+    title: `✏️ অর্ডার #${orderNo} এর প্রোডাক্ট আপডেট করা হয়েছে`,
+    message: `আপনার অনুরোধ অনুযায়ী অর্ডার #${orderNo} এর প্রোডাক্ট পরিবর্তন করে "${newPackageName}" (মোট মূল্য: ৳${toBn(
+      newPrice
+    )}${newCoins > 0 ? `, মোট কয়েন: ${toBn(newCoins)}` : ""}) নির্ধারণ করা হয়েছে।${
+      adminNote?.trim() ? ` এডমিন নোট: ${adminNote.trim()}` : ""
+    }`,
+    orderNo: orders[idx].orderNo,
+    orderStatus: orders[idx].status,
+    targetPhone: orders[idx].phone,
+    badge: "অর্ডার এডিট",
+    badgeColor: "sky",
+    isRead: false,
+    createdAt: nowIso,
+  });
+
   return orders[idx];
 }
 
 export function deleteOrder(orderNo: string): boolean {
   const orders = getOrders();
   const filtered = orders.filter(o => o.orderNo !== orderNo);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
-  window.dispatchEvent(new Event("nextgen_orders_updated"));
+  persistKey(STORAGE_KEY, filtered, "nextgen_orders_updated");
   return true;
 }
 
@@ -1272,7 +1396,7 @@ export function saveNotificationLog(log: OrderNotificationLog): void {
   try {
     const logs = getNotificationLogs();
     const updatedLogs = [log, ...logs.filter(l => l.id !== log.id)].slice(0, 300);
-    localStorage.setItem(NOTIFICATION_LOGS_KEY, JSON.stringify(updatedLogs));
+    persistKey(NOTIFICATION_LOGS_KEY, updatedLogs, "nextgen_notification_logs_updated");
 
     // Also attach to the order's notificationLogs list
     const orders = getOrders();
@@ -1288,11 +1412,8 @@ export function saveNotificationLog(log: OrderNotificationLog): void {
           ...existingOrderLogs.filter(l => l.id !== log.id),
         ],
       };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(orders));
+      persistKey(STORAGE_KEY, orders, "nextgen_orders_updated");
     }
-
-    window.dispatchEvent(new Event("nextgen_notification_logs_updated"));
-    window.dispatchEvent(new Event("nextgen_orders_updated"));
   } catch (err) {
     console.error("Failed to save notification log", err);
   }
@@ -1480,7 +1601,6 @@ export function getAppNotifications(): AppNotification[] {
   try {
     const raw = localStorage.getItem(APP_NOTIFICATIONS_KEY);
     if (!raw) {
-      localStorage.setItem(APP_NOTIFICATIONS_KEY, JSON.stringify(INITIAL_NOTIFICATIONS));
       return INITIAL_NOTIFICATIONS;
     }
     return JSON.parse(raw);
@@ -1492,9 +1612,8 @@ export function getAppNotifications(): AppNotification[] {
 export function saveAppNotification(notif: AppNotification): void {
   try {
     const list = getAppNotifications();
-    const updated = [notif, ...list.filter(n => n.id !== notif.id)];
-    localStorage.setItem(APP_NOTIFICATIONS_KEY, JSON.stringify(updated.slice(0, 60)));
-    window.dispatchEvent(new CustomEvent("nextgen_app_notifications_changed", { detail: notif }));
+    const updated = [notif, ...list.filter(n => n.id !== notif.id)].slice(0, 60);
+    persistKey(APP_NOTIFICATIONS_KEY, updated, "nextgen_app_notifications_changed", notif);
   } catch (err) {
     console.error("Failed to save app notification", err);
   }
@@ -1504,8 +1623,7 @@ export function markNotificationAsRead(id: string): void {
   try {
     const list = getAppNotifications();
     const updated = list.map(n => n.id === id ? { ...n, isRead: true } : n);
-    localStorage.setItem(APP_NOTIFICATIONS_KEY, JSON.stringify(updated));
-    window.dispatchEvent(new Event("nextgen_app_notifications_changed"));
+    persistKey(APP_NOTIFICATIONS_KEY, updated, "nextgen_app_notifications_changed");
   } catch (err) {
     console.error("Failed to mark notification as read", err);
   }
@@ -1515,8 +1633,7 @@ export function markAllNotificationsAsRead(): void {
   try {
     const list = getAppNotifications();
     const updated = list.map(n => ({ ...n, isRead: true }));
-    localStorage.setItem(APP_NOTIFICATIONS_KEY, JSON.stringify(updated));
-    window.dispatchEvent(new Event("nextgen_app_notifications_changed"));
+    persistKey(APP_NOTIFICATIONS_KEY, updated, "nextgen_app_notifications_changed");
   } catch (err) {
     console.error("Failed to mark all notifications as read", err);
   }
@@ -1526,8 +1643,7 @@ export function deleteAppNotification(id: string): void {
   try {
     const list = getAppNotifications();
     const updated = list.filter(n => n.id !== id);
-    localStorage.setItem(APP_NOTIFICATIONS_KEY, JSON.stringify(updated));
-    window.dispatchEvent(new Event("nextgen_app_notifications_changed"));
+    persistKey(APP_NOTIFICATIONS_KEY, updated, "nextgen_app_notifications_changed");
   } catch (err) {
     console.error("Failed to delete notification", err);
   }
@@ -1553,9 +1669,6 @@ export function broadcastAdminAnnouncement(params: {
 }
 
 // ===== 11. DYNAMIC CATALOG SECTIONS & PRODUCTS MANAGEMENT =====
-const CATALOG_SECTIONS_KEY = "nextgen_catalog_sections_v3";
-const CATALOG_PRODUCTS_KEY = "nextgen_catalog_products_v3";
-const PAYMENT_OPTIONS_KEY = "nextgen_payment_options_v3";
 
 export const DEFAULT_CATALOG_SECTIONS: CatalogSection[] = [
   {
@@ -1764,7 +1877,6 @@ export function getCatalogSections(): CatalogSection[] {
   try {
     const raw = localStorage.getItem(CATALOG_SECTIONS_KEY);
     if (!raw) {
-      localStorage.setItem(CATALOG_SECTIONS_KEY, JSON.stringify(DEFAULT_CATALOG_SECTIONS));
       return DEFAULT_CATALOG_SECTIONS;
     }
     const parsed: CatalogSection[] = JSON.parse(raw);
@@ -1775,12 +1887,7 @@ export function getCatalogSections(): CatalogSection[] {
 }
 
 export function saveCatalogSections(sections: CatalogSection[]): void {
-  try {
-    localStorage.setItem(CATALOG_SECTIONS_KEY, JSON.stringify(sections));
-    window.dispatchEvent(new CustomEvent("nextgen_catalog_sections_updated", { detail: sections }));
-  } catch (err) {
-    console.error("Failed to save catalog sections", err);
-  }
+  persistKey(CATALOG_SECTIONS_KEY, sections, "nextgen_catalog_sections_updated", sections);
 }
 
 export function addCatalogSection(sectionData: Omit<CatalogSection, "id">): CatalogSection {
@@ -1818,7 +1925,6 @@ export function getCatalogProducts(): CatalogProduct[] {
   try {
     const raw = localStorage.getItem(CATALOG_PRODUCTS_KEY);
     if (!raw) {
-      localStorage.setItem(CATALOG_PRODUCTS_KEY, JSON.stringify(DEFAULT_CATALOG_PRODUCTS));
       return DEFAULT_CATALOG_PRODUCTS;
     }
     return JSON.parse(raw);
@@ -1828,12 +1934,7 @@ export function getCatalogProducts(): CatalogProduct[] {
 }
 
 export function saveCatalogProducts(products: CatalogProduct[]): void {
-  try {
-    localStorage.setItem(CATALOG_PRODUCTS_KEY, JSON.stringify(products));
-    window.dispatchEvent(new CustomEvent("nextgen_catalog_products_updated", { detail: products }));
-  } catch (err) {
-    console.error("Failed to save catalog products", err);
-  }
+  persistKey(CATALOG_PRODUCTS_KEY, products, "nextgen_catalog_products_updated", products);
 }
 
 export function addCatalogProduct(data: Omit<CatalogProduct, "id">): CatalogProduct {
@@ -1880,11 +1981,11 @@ export function getPaymentOptions(): PaymentOptionConfig[] {
 
     if (!raw) {
       currentOptions = DEFAULT_PAYMENT_OPTIONS.map(p => {
-        if (p.id === "bkash" && shop.bkashNumber) return { ...p, number: shop.bkashNumber };
-        if (p.id === "nagad" && shop.nagadNumber) return { ...p, number: shop.nagadNumber };
-        return p;
+        const label = p.label || `${p.name} (${p.bnName})`;
+        if (p.id === "bkash" && shop.bkashNumber) return { ...p, label, number: shop.bkashNumber };
+        if (p.id === "nagad" && shop.nagadNumber) return { ...p, label, number: shop.nagadNumber };
+        return { ...p, label };
       });
-      localStorage.setItem(PAYMENT_OPTIONS_KEY, JSON.stringify(currentOptions));
       return currentOptions;
     }
 
@@ -1910,12 +2011,7 @@ export function getPaymentOptions(): PaymentOptionConfig[] {
 }
 
 export function savePaymentOptions(options: PaymentOptionConfig[]): void {
-  try {
-    localStorage.setItem(PAYMENT_OPTIONS_KEY, JSON.stringify(options));
-    window.dispatchEvent(new CustomEvent("nextgen_payment_options_updated", { detail: options }));
-  } catch (err) {
-    console.error("Failed to save payment options", err);
-  }
+  persistKey(PAYMENT_OPTIONS_KEY, options, "nextgen_payment_options_updated", options);
 }
 
 export function updatePaymentOption(id: string, updates: Partial<PaymentOptionConfig>): PaymentOptionConfig | null {
@@ -1940,4 +2036,103 @@ export function togglePaymentMethod(id: string, isEnabled: boolean, disabledReas
     disabledReason: isEnabled ? "" : (disabledReason || "সার্ভার সাময়িক বন্ধ থাকায় এই পেমেন্ট অপশনটি বন্ধ রাখা হয়েছে।") 
   });
 }
+
+// ===== 12. AUTOMATIC TWO-WAY SERVER & FIREBASE FIRESTORE SYNC =====
+let storageSyncInitialized = false;
+
+export async function initPersistentStorageSync(): Promise<void> {
+  if (typeof window === "undefined" || storageSyncInitialized) return;
+  storageSyncInitialized = true;
+
+  const syncedKeys = Object.keys(KEY_EVENT_MAP);
+
+  const applyIncomingValue = (key: string, val: any) => {
+    if (val === undefined || val === null) return;
+    try {
+      const serialized = typeof val === "string" ? val : JSON.stringify(val);
+      const currentRaw = localStorage.getItem(key);
+      if (currentRaw !== serialized) {
+        localStorage.setItem(key, serialized);
+        const evtName = KEY_EVENT_MAP[key];
+        if (evtName) {
+          window.dispatchEvent(new CustomEvent(evtName, { detail: val }));
+        }
+      }
+    } catch (e) {
+      console.error(`Failed to apply incoming state for ${key}`, e);
+    }
+  };
+
+  // 1. Hydrate from Express Server disk store (/api/state)
+  let serverState: Record<string, any> = {};
+  try {
+    const res = await fetch("/api/state");
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.state && typeof json.state === "object") {
+        serverState = json.state;
+        for (const key of syncedKeys) {
+          if (serverState[key] !== undefined) {
+            applyIncomingValue(key, serverState[key]);
+          }
+        }
+      }
+    }
+  } catch {
+    // Offline or server starting up
+  }
+
+  // 2. Hydrate from & synchronize with Firebase Firestore + setup real-time listeners
+  for (const key of syncedKeys) {
+    loadCloudStateKey(key)
+      .then((cloudVal) => {
+        if (cloudVal !== null && cloudVal !== undefined) {
+          applyIncomingValue(key, cloudVal);
+          // Ensure Express server also has this cloud state backed up
+          if (serverState[key] === undefined) {
+            fetch("/api/state", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ key, value: cloudVal }),
+            }).catch(() => {});
+          }
+        } else {
+          // Cloud has no record yet; if local or server has data, push it to Cloud & Server
+          const rawLocal = localStorage.getItem(key);
+          if (rawLocal !== null) {
+            try {
+              const parsed =
+                rawLocal === "true" || rawLocal === "false"
+                  ? rawLocal
+                  : JSON.parse(rawLocal);
+              saveCloudStateKey(key, parsed).catch(() => {});
+              if (serverState[key] === undefined) {
+                fetch("/api/state", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ key, value: parsed }),
+                }).catch(() => {});
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+      })
+      .catch(() => {});
+
+    // Real-time Firestore listener so changes from any tab/device sync immediately
+    subscribeCloudStateKey(key, (cloudVal) => {
+      if (cloudVal !== null && cloudVal !== undefined) {
+        applyIncomingValue(key, cloudVal);
+      }
+    });
+  }
+}
+
+// Start sync immediately when module is imported in browser
+if (typeof window !== "undefined") {
+  initPersistentStorageSync();
+}
+
 

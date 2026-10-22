@@ -91,7 +91,8 @@ export function NotificationDropdown({
         n.type === "order_created" ||
         n.type === "order_processing" ||
         n.type === "order_completed" ||
-        n.type === "order_cancelled"
+        n.type === "order_cancelled" ||
+        n.type === "order_updated"
       );
     }
     if (filter === "announcements") {
@@ -108,6 +109,8 @@ export function NotificationDropdown({
         return <Clock className="w-4 h-4 text-amber-400 animate-spin" />;
       case "order_cancelled":
         return <AlertTriangle className="w-4 h-4 text-rose-400" />;
+      case "order_updated":
+        return <Sparkles className="w-4 h-4 text-sky-400" />;
       case "order_created":
         return <Sparkles className="w-4 h-4 text-cyan-400" />;
       case "limited_offer":

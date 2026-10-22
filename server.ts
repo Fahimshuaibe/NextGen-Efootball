@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 import { processOrderNotificationRequest } from "./api/notify-order";
 
@@ -8,12 +9,87 @@ dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const DATA_DIR = path.resolve(__dirname, ".data");
+const STATE_FILE = path.join(DATA_DIR, "store-state.json");
+
+interface PersistedStateMap {
+  [key: string]: {
+    payloadJson: string;
+    updatedAt: string;
+  };
+}
+
+function readServerStateFromDisk(): PersistedStateMap {
+  try {
+    if (!fs.existsSync(STATE_FILE)) return {};
+    const raw = fs.readFileSync(STATE_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (err) {
+    console.warn("Failed to read server state file:", err);
+    return {};
+  }
+}
+
+function writeServerStateToDisk(state: PersistedStateMap): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("Failed to write server state file:", err);
+  }
+}
 
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
-  app.use(express.json({ limit: "2mb" }));
+  app.use(express.json({ limit: "10mb" }));
+
+  // Persistent Server-Side State Sync Endpoints (ensures data never resets on browser refresh)
+  app.get("/api/state", (_req, res) => {
+    const state = readServerStateFromDisk();
+    res.json({
+      ok: true,
+      state,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  app.post("/api/state", (req, res) => {
+    try {
+      const { key, payloadJson, updatedAt, bulk } = req.body || {};
+      const current = readServerStateFromDisk();
+
+      if (bulk && typeof bulk === "object") {
+        for (const [k, v] of Object.entries(bulk)) {
+          if (v && typeof (v as any).payloadJson === "string") {
+            current[k] = {
+              payloadJson: (v as any).payloadJson,
+              updatedAt: (v as any).updatedAt || new Date().toISOString(),
+            };
+          }
+        }
+        writeServerStateToDisk(current);
+        return res.json({ ok: true, count: Object.keys(bulk).length });
+      }
+
+      if (!key || typeof payloadJson !== "string") {
+        return res.status(400).json({ ok: false, error: "Missing key or payloadJson" });
+      }
+
+      current[String(key)] = {
+        payloadJson,
+        updatedAt: updatedAt || new Date().toISOString(),
+      };
+      writeServerStateToDisk(current);
+      return res.json({ ok: true, key, updatedAt: current[String(key)].updatedAt });
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err?.message || "Failed to persist state" });
+    }
+  });
 
   // Health & configuration check endpoint (never exposes secrets)
   app.get("/api/notification-health", (_req, res) => {

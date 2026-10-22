@@ -1,0 +1,36 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function isValidAppState(data) {
+      return data.keys().hasAll(['key', 'payloadJson', 'updatedAt']) &&
+        data.keys().hasOnly(['key', 'payloadJson', 'updatedAt']) &&
+        data.key is string && data.key.size() >= 1 && data.key.size() <= 128 &&
+        data.payloadJson is string && data.payloadJson.size() <= 950000 &&
+        data.updatedAt is string && data.updatedAt.size() >= 1 && data.updatedAt.size() <= 64;
+    }
+
+    match /test/{docId} {
+      allow get: if isValidId(docId);
+    }
+
+    match /app_state/{stateKey} {
+      allow get: if isValidId(stateKey);
+      allow list: if resource.data.key is string && resource.data.key.size() <= 128;
+      allow create: if isValidId(stateKey) && isValidAppState(incoming()) && incoming().key == stateKey;
+      allow update: if isValidId(stateKey) && isValidAppState(incoming()) && incoming().key == stateKey &&
+        incoming().diff(resource.data).affectedKeys().hasOnly(['payloadJson', 'updatedAt', 'key']);
+    }
+  }
+}

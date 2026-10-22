@@ -6,14 +6,16 @@ import {
   BlockedUser, 
   CustomerAccount, 
   ShopSettings,
-  LiveChatMessage,
-  PaymentOptionConfig
+  PaymentOptionConfig,
+  CartItem
 } from "../types";
 import { 
   getOrders, 
   updateOrderStatus, 
   deleteOrder, 
   updateOrderDetails,
+  updateOrderItems,
+  getCatalogProducts,
   getAdminOnlineStatus, 
   setAdminOnlineStatus,
   getAdminSecurityConfig,
@@ -30,10 +32,6 @@ import {
   registerUserAccount,
   deleteRegisteredUser,
   deleteCustomerAccount,
-  getAllChatConversations,
-  getLiveChatMessages,
-  sendLiveChatMessage,
-  markChatAsRead,
   getActiveCustomerPhone,
   getNotificationLogs,
   getAppNotifications,
@@ -98,9 +96,10 @@ import {
   Play,
   Megaphone,
   Flame,
-  Sparkles
+  Sparkles,
+  Plus,
+  Minus
 } from "lucide-react";
-import { LiveChatModal } from "./LiveChatModal";
 import {
   sendTestAutoWhatsappAlert,
   sendTestTelegramAlert,
@@ -122,7 +121,7 @@ interface Props {
   onViewReceipt: (order: Order) => void;
 }
 
-type AdminTab = "orders" | "products" | "chat" | "security" | "settings" | "fraud" | "customers" | "announcements";
+type AdminTab = "orders" | "products" | "security" | "settings" | "fraud" | "customers" | "announcements";
 
 export function AdminPanel({ onClose, onViewReceipt }: Props) {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
@@ -170,6 +169,14 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
     return typeof Notification !== "undefined" && Notification.permission === "granted";
   });
   const [editingOrder, setEditingOrder] = useState<{ orderNo: string; phone: string; otpWhatsapp: string } | null>(null);
+  const [editingOrderItems, setEditingOrderItems] = useState<{
+    orderNo: string;
+    customerName: string;
+    phone: string;
+    items: CartItem[];
+    adminNote: string;
+    selectedAddProductId: string;
+  } | null>(null);
 
   // Security Credentials State
   const [secConfig, setSecConfig] = useState<AdminSecurityConfig>(getAdminSecurityConfig);
@@ -235,14 +242,13 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
   const [alsoDeleteCustomerOrders, setAlsoDeleteCustomerOrders] = useState<boolean>(false);
   const [userAdminMsg, setUserAdminMsg] = useState("");
 
-  // Live Chat inside Admin Panel
-  const [chatConversations, setChatConversations] = useState<any[]>([]);
-  const [activeChatPhone, setActiveChatPhone] = useState<string>("");
-  const [activeChatMessages, setActiveChatMessages] = useState<LiveChatMessage[]>([]);
-  const [chatInputText, setChatInputText] = useState("");
-
-  // Quick Chat Modal for an order
-  const [chatModalOrder, setChatModalOrder] = useState<Order | null>(null);
+  const updateShopSettingField = (patch: Partial<ShopSettings>) => {
+    setShopSettingsState((prev) => {
+      const next = { ...prev, ...patch };
+      updateShopSettings(next);
+      return next;
+    });
+  };
 
   const loadData = () => {
     setOrders(getOrders());
@@ -250,14 +256,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
     setCustomers(getAllCustomerAccounts());
     setSecConfig(getAdminSecurityConfig());
     setShopSettingsState(getShopSettings());
-    const convos = getAllChatConversations();
-    setChatConversations(convos);
-    if (activeChatPhone) {
-      setActiveChatMessages(getLiveChatMessages(activeChatPhone));
-    } else if (convos.length > 0) {
-      setActiveChatPhone(convos[0].phone);
-      setActiveChatMessages(getLiveChatMessages(convos[0].phone));
-    }
+    setAllAppNotifs(getAppNotifications());
   };
 
   useEffect(() => {
@@ -268,22 +267,22 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
     const handleUpdate = () => {
       loadData();
     };
-    const handleChatUpdate = () => {
-      setChatConversations(getAllChatConversations());
-      if (activeChatPhone) {
-        setActiveChatMessages(getLiveChatMessages(activeChatPhone));
-      }
-    };
 
     window.addEventListener("nextgen_orders_updated", handleUpdate);
     window.addEventListener("nextgen_blocked_users_updated", handleUpdate);
-    window.addEventListener("nextgen_chat_updated", handleChatUpdate);
+    window.addEventListener("nextgen_shop_settings_updated", handleUpdate);
+    window.addEventListener("nextgen_user_account_updated", handleUpdate);
+    window.addEventListener("nextgen_app_notifications_changed", handleUpdate);
+    window.addEventListener("nextgen_payment_options_updated", handleUpdate);
     return () => {
       window.removeEventListener("nextgen_orders_updated", handleUpdate);
       window.removeEventListener("nextgen_blocked_users_updated", handleUpdate);
-      window.removeEventListener("nextgen_chat_updated", handleChatUpdate);
+      window.removeEventListener("nextgen_shop_settings_updated", handleUpdate);
+      window.removeEventListener("nextgen_user_account_updated", handleUpdate);
+      window.removeEventListener("nextgen_app_notifications_changed", handleUpdate);
+      window.removeEventListener("nextgen_payment_options_updated", handleUpdate);
     };
-  }, [isAuthenticated, activeChatPhone]);
+  }, [isAuthenticated]);
 
   const saveUserLockRecord = (attempts: number, lockTime: number) => {
     try {
@@ -584,20 +583,49 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
     }
   };
 
-  // Admin chat send
-  const handleAdminSendChat = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!chatInputText.trim() || !activeChatPhone) return;
-
-    sendLiveChatMessage({
-      phone: activeChatPhone,
-      customerName: "NextGen Admin",
-      sender: "admin",
-      text: chatInputText.trim()
+  const openOrderItemsEditor = (order: Order) => {
+    const initialItems: CartItem[] =
+      order.items && order.items.length > 0
+        ? order.items.map((it) => ({ ...it, quantity: it.quantity || 1 }))
+        : [
+            {
+              id: `custom_${order.orderNo}`,
+              name: order.packageName,
+              price: order.price,
+              coins: order.coins || 0,
+              quantity: 1,
+              category: "regular",
+            },
+          ];
+    const catalogProds = getCatalogProducts();
+    setEditingOrderItems({
+      orderNo: order.orderNo,
+      customerName: order.name,
+      phone: order.phone,
+      items: initialItems,
+      adminNote: order.adminNotes || "",
+      selectedAddProductId: catalogProds[0]?.id || "",
     });
+  };
 
-    setChatInputText("");
-    setActiveChatMessages(getLiveChatMessages(activeChatPhone));
+  const handleSaveEditedOrderItems = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingOrderItems || editingOrderItems.items.length === 0) return;
+
+    const updated = updateOrderItems(
+      editingOrderItems.orderNo,
+      editingOrderItems.items,
+      editingOrderItems.adminNote
+    );
+
+    if (updated) {
+      setNotificationFeedback({
+        type: "success",
+        text: `✅ অর্ডার #${updated.orderNo} এর প্রোডাক্ট সফলভাবে এডিট করা হয়েছে (${updated.packageName} — ৳${toBn(updated.price)}) এবং ওয়েবসাইটের নোটিফিকেশনে বার্তা পাঠানো হয়েছে! (ইমেইল পাঠানো হয়নি)`,
+      });
+    }
+    setEditingOrderItems(null);
+    loadData();
   };
 
   const handleBroadcastAnnouncement = (e: React.FormEvent) => {
@@ -678,7 +706,6 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
   const processingOrders = orders.filter(o => o.status === "processing").length;
   const completedOrders = orders.filter(o => o.status === "completed").length;
   const totalRevenue = orders.reduce((sum, o) => sum + (o.status !== "cancelled" ? o.price : 0), 0);
-  const totalUnreadChats = chatConversations.reduce((sum, c) => sum + c.unreadCount, 0);
 
   // Filters
   const filteredOrders = orders.filter(o => {
@@ -887,7 +914,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                     Pro Hub
                   </span>
                 </h1>
-                <p className="text-[11px] text-slate-400">রিয়েলটাইম অর্ডার পাইপলাইন, লাইভ চ্যাট ও সেটিংস</p>
+                <p className="text-[11px] text-slate-400">রিয়েলটাইম অর্ডার পাইপলাইন, প্রোডাক্ট কন্ট্রোল ও সেটিংস</p>
               </div>
             </div>
 
@@ -985,23 +1012,6 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
           >
             <Package className="w-4 h-4" />
             <span>🛍️ প্রোডাক্ট, অফার ও পেমেন্ট কন্ট্রোল</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab("chat")}
-            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
-              activeTab === "chat"
-                ? "bg-cyan-500 text-black shadow-md shadow-cyan-500/20"
-                : "text-slate-400 hover:text-white hover:bg-slate-800"
-            }`}
-          >
-            <Headphones className="w-4 h-4" />
-            <span>লাইভ চ্যাট</span>
-            {totalUnreadChats > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full bg-emerald-400 text-black text-[10px] font-black animate-pulse">
-                {toBn(totalUnreadChats)}
-              </span>
-            )}
           </button>
 
           <button
@@ -1401,18 +1411,69 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                           )}
 
                           {/* Customer & Package Details */}
-                          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                             <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800">
                               <span className="text-[11px] text-slate-400 block">গ্রাহকের নাম:</span>
                               <span className="font-bold text-white text-sm mt-0.5 block">{order.name}</span>
                             </div>
 
-                            <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800">
-                              <span className="text-[11px] text-slate-400 block">প্যাকেজ ও মূল্য:</span>
-                              <span className="font-bold text-emerald-400 text-sm mt-0.5 block">
-                                ৳ {toBn(order.price)} {order.coins ? `(${toBn(order.coins)} কয়েন)` : ""}
-                              </span>
+                            <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800 flex items-center justify-between gap-2">
+                              <div className="min-w-0">
+                                <span className="text-[11px] text-slate-400 block">প্যাকেজ ও মূল্য:</span>
+                                <span className="font-bold text-emerald-400 text-sm mt-0.5 block truncate">
+                                  ৳ {toBn(order.price)} {order.coins ? `(${toBn(order.coins)} কয়েন)` : ""}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => openOrderItemsEditor(order)}
+                                className="px-2.5 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 font-extrabold text-[11px] flex items-center gap-1 shrink-0 cursor-pointer transition"
+                                title="অর্ডারের প্রোডাক্ট বা আইটেম পরিবর্তন/এডিট করুন"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                                <span>প্রোডাক্ট এডিট</span>
+                              </button>
                             </div>
+                          </div>
+
+                          {/* Ordered Products Breakdown Box */}
+                          <div className="mt-2 p-2.5 rounded-xl bg-slate-950/90 border border-slate-800/90 space-y-1.5 text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] text-slate-400 font-semibold">
+                                🛍️ অর্ডারকৃত প্রোডাক্ট ({toBn(order.items?.length || 1)} টি):
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => openOrderItemsEditor(order)}
+                                className="text-[11px] text-cyan-400 hover:underline font-bold cursor-pointer"
+                              >
+                                ✏️ আইটেম বাদ দিন / এডিট করুন
+                              </button>
+                            </div>
+                            {order.items && order.items.length > 0 ? (
+                              <div className="space-y-1">
+                                {order.items.map((it, iIdx) => (
+                                  <div
+                                    key={`${it.id}_${iIdx}`}
+                                    className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800/80 text-[11px]"
+                                  >
+                                    <span className="text-white font-semibold truncate pr-2">
+                                      {iIdx + 1}. {it.name}{" "}
+                                      {(it.quantity || 1) > 1 && (
+                                        <span className="text-cyan-300 font-mono">× {toBn(it.quantity || 1)}</span>
+                                      )}
+                                    </span>
+                                    <span className="font-mono text-emerald-400 font-bold shrink-0">
+                                      ৳ {toBn(it.price * (it.quantity || 1))}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800/80 text-[11px] text-white font-semibold">
+                                {order.packageName}
+                              </div>
+                            )}
                           </div>
 
                           {/* Contact Method & Channels */}
@@ -1468,15 +1529,6 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                                   title="কন্টাক্ট কপি করুন"
                                 >
                                   {copiedKey === `contact-${order.orderNo}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                                </button>
-
-                                <button
-                                  onClick={() => setChatModalOrder(order)}
-                                  className="p-1 rounded bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 text-[11px] font-bold flex items-center gap-1 shrink-0"
-                                  title="ওয়েবসাইটে লাইভ চ্যাট করুন"
-                                >
-                                  <Headphones className="w-3 h-3" />
-                                  <span>লাইভ চ্যাট</span>
                                 </button>
                               </div>
                             </div>
@@ -1763,167 +1815,6 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
             </div>
           )}
 
-          {/* TAB 2: LIVE CHAT */}
-          {activeTab === "chat" && (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col md:flex-row h-[650px] shadow-2xl">
-              {/* Left Conversations List */}
-              <div className="w-full md:w-80 border-r border-slate-800 flex flex-col bg-slate-950/80">
-                <div className="p-3.5 border-b border-slate-800">
-                  <h3 className="font-bold text-white text-sm flex items-center justify-between">
-                    <span>কাস্টমার চ্যাট তালিকা</span>
-                    <span className="text-xs text-cyan-400 font-mono">
-                      {toBn(chatConversations.length)} টি
-                    </span>
-                  </h3>
-                </div>
-
-                <div className="flex-1 overflow-y-auto divide-y divide-slate-850">
-                  {chatConversations.length === 0 ? (
-                    <div className="p-8 text-center text-slate-500 text-xs">
-                      কোনো কথোপকথন নেই
-                    </div>
-                  ) : (
-                    chatConversations.map((c) => (
-                      <button
-                        key={c.phone}
-                        onClick={() => {
-                          setActiveChatPhone(c.phone);
-                          setActiveChatMessages(getLiveChatMessages(c.phone));
-                          markChatAsRead(c.phone);
-                        }}
-                        className={`w-full p-3 text-left transition flex items-start gap-3 cursor-pointer ${
-                          activeChatPhone === c.phone
-                            ? "bg-cyan-500/10 border-l-4 border-cyan-400"
-                            : "hover:bg-slate-900"
-                        }`}
-                      >
-                        <div className="w-9 h-9 rounded-xl bg-slate-800 text-cyan-400 flex items-center justify-center font-bold text-sm shrink-0">
-                          {c.name.charAt(0) || "U"}
-                        </div>
-
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="font-bold text-white text-xs truncate">{c.name}</span>
-                            <span className="text-[10px] text-slate-400">{c.lastMessage.time}</span>
-                          </div>
-                          <p className="text-[11px] text-slate-400 font-mono">{formatBdPhonePretty(c.phone)}</p>
-                          <p className="text-xs text-slate-300 truncate mt-0.5">{c.lastMessage.text}</p>
-                        </div>
-
-                        {c.unreadCount > 0 && (
-                          <span className="px-1.5 py-0.5 rounded-full bg-emerald-400 text-black text-[10px] font-black shrink-0">
-                            {toBn(c.unreadCount)}
-                          </span>
-                        )}
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              {/* Right Chat Panel */}
-              <div className="flex-1 flex flex-col bg-[#070e1e]">
-                {activeChatPhone ? (
-                  <>
-                    {/* Header */}
-                    <div className="p-3.5 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-cyan-500/20 text-cyan-300 flex items-center justify-center font-bold">
-                          <Headphones className="w-4 h-4" />
-                        </div>
-                        <div>
-                          <h4 className="font-bold text-white text-sm">
-                            {chatConversations.find(c => c.phone === activeChatPhone)?.name || "কাস্টমার"}
-                          </h4>
-                          <p className="text-xs text-slate-400 font-mono">
-                            {formatBdPhonePretty(activeChatPhone)}
-                          </p>
-                        </div>
-                      </div>
-
-                      <a
-                        href={`https://wa.me/${formatBdWhatsappForUrl(activeChatPhone)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-3 py-1.5 rounded-xl bg-emerald-500 text-black text-xs font-bold flex items-center gap-1.5"
-                      >
-                        <MessageCircle className="w-3.5 h-3.5" />
-                        <span>WhatsApp এ যান</span>
-                      </a>
-                    </div>
-
-                    {/* Messages */}
-                    <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                      {activeChatMessages.map((m) => {
-                        const isMe = m.sender === "admin";
-                        return (
-                          <div
-                            key={m.id}
-                            className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
-                          >
-                            <span className="text-[10px] text-slate-400 mb-0.5 px-1">
-                              {isMe ? "🛡️ আপনি (এডমিন)" : `👤 ${m.customerName}`} • {m.time}
-                            </span>
-                            <div
-                              className={`max-w-[80%] rounded-2xl px-4 py-2 text-xs sm:text-sm leading-relaxed shadow ${
-                                isMe
-                                  ? "bg-gradient-to-r from-cyan-500 to-emerald-500 text-black font-medium rounded-tr-none"
-                                  : "bg-slate-800 border border-slate-700 text-white rounded-tl-none"
-                              }`}
-                            >
-                              {m.text}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Quick Shortcuts */}
-                    <div className="px-3 py-1.5 bg-slate-950/80 border-t border-slate-800 flex items-center gap-1.5 overflow-x-auto">
-                      {[
-                        "আসসালামু আলাইকুম! আপনার আইডি লগইন করা হচ্ছে, আপনি কি একটিভ আছেন?",
-                        "আপনার জিমেইলে OTP পাঠানো হয়েছে, দয়া করে দিন। (মেয়াদ ৫ মিনিট)",
-                        "আলহামদুলিল্লাহ আপনার কয়েন সফলভাবে যোগ করে দেওয়া হয়েছে!",
-                        "আপনার পেমেন্ট পেয়েছি, ২ মিনিটে কাজ শুরু হচ্ছে।"
-                      ].map((chip, idx) => (
-                        <button
-                          key={idx}
-                          type="button"
-                          onClick={() => setChatInputText(chip)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[11px] text-cyan-300 whitespace-nowrap transition cursor-pointer"
-                        >
-                          {chip}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Chat Input */}
-                    <form onSubmit={handleAdminSendChat} className="p-3 bg-slate-950 border-t border-slate-800 flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={chatInputText}
-                        onChange={(e) => setChatInputText(e.target.value)}
-                        placeholder="কাস্টমারকে উত্তর দিন..."
-                        className="flex-1 px-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs sm:text-sm focus:outline-none focus:border-cyan-400"
-                      />
-                      <button
-                        type="submit"
-                        disabled={!chatInputText.trim()}
-                        className="p-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 text-black transition cursor-pointer"
-                      >
-                        <Send className="w-4 h-4" />
-                      </button>
-                    </form>
-                  </>
-                ) : (
-                  <div className="flex-1 flex items-center justify-center p-8 text-center text-slate-500 text-sm">
-                    বাম পাশ থেকে যেকোনো কথোপকথন সিলেক্ট করুন
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
           {/* TAB 3: CUSTOMERS & USER ACCOUNTS (FULL ADMIN ACCESS) */}
           {activeTab === "customers" && (
             <div className="space-y-6">
@@ -2108,7 +1999,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                         <th className="p-3.5">কাস্টমার / ইউজারনেম</th>
                         <th className="p-3.5">ইমেইল ও মোবাইল</th>
                         <th className="p-3.5">পাসওয়ার্ড (Admin Access)</th>
-                        <th className="p-3.5">অর্ডার (মোট / কমপ্লিট / বাতিল)</th>
+                        <th className="p-3.5">লয়্যালটি ও সর্বশেষ সক্রিয় (Last Active)</th>
                         <th className="p-3.5">মোট খরচ</th>
                         <th className="p-3.5 text-right">অ্যাকশন</th>
                       </tr>
@@ -2117,11 +2008,26 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                       {customers.map((c, idx) => {
                         const rowKey = c.id || c.phone || String(idx);
                         const isPassShown = !!showUserPassMap[rowKey];
+                        const isLoyal = c.totalOrders >= 2 || c.completedOrders >= 2 || c.totalSpent >= 2000;
+                        const lastActiveIso = c.lastActiveAt || c.createdAt;
+                        const lastActiveFormatted = lastActiveIso
+                          ? new Date(lastActiveIso).toLocaleDateString("bn-BD", {
+                              day: "numeric",
+                              month: "short",
+                              year: "numeric",
+                            })
+                          : "তথ্য নেই";
+
                         return (
                           <tr key={rowKey} className="hover:bg-slate-850 transition">
                             <td className="p-3.5">
-                              <div className="font-bold text-white flex items-center gap-1.5">
+                              <div className="font-bold text-white flex items-center gap-1.5 flex-wrap">
                                 <span>{c.name}</span>
+                                {isLoyal && (
+                                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-black">
+                                    👑 লয়্যাল ইউজার
+                                  </span>
+                                )}
                                 {c.emailVerified && (
                                   <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 text-[10px]">
                                     Verified
@@ -2204,11 +2110,21 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                               )}
                             </td>
 
-                            <td className="p-3.5 font-mono">
-                              <span className="text-white font-bold">{toBn(c.totalOrders)} টি</span>{" "}
-                              <span className="text-slate-400 text-[11px]">
-                                (🟢 {toBn(c.completedOrders)} • 🔴 {toBn(c.cancelledOrders)})
-                              </span>
+                            <td className="p-3.5">
+                              <div className="flex flex-col gap-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 text-[11px] font-extrabold">
+                                    🛍️ আজীবন অর্ডার: {toBn(c.totalOrders)} টি
+                                  </span>
+                                  <span className="text-slate-400 text-[10px] font-mono">
+                                    (🟢 {toBn(c.completedOrders)} • 🔴 {toBn(c.cancelledOrders)})
+                                  </span>
+                                </div>
+                                <span className="inline-flex items-center gap-1 text-[10px] text-slate-400">
+                                  <Clock className="w-3 h-3 text-emerald-400" />
+                                  <span>Last Active: <b className="text-slate-200">{lastActiveFormatted}</b></span>
+                                </span>
+                              </div>
                             </td>
 
                             <td className="p-3.5 font-mono font-bold text-emerald-400">
@@ -2234,18 +2150,6 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                                     className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-bold cursor-pointer border border-amber-500/30"
                                   >
                                     পাসওয়ার্ড / এডিট
-                                  </button>
-                                )}
-                                {c.phone && (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setActiveChatPhone(c.phone);
-                                      setActiveTab("chat");
-                                    }}
-                                    className="px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 font-semibold cursor-pointer border border-cyan-500/30"
-                                  >
-                                    চ্যাট
                                   </button>
                                 )}
                                 <button
@@ -2516,7 +2420,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                         type="tel"
                         required
                         value={shopSettings.bkashNumber}
-                        onChange={(e) => setShopSettingsState({ ...shopSettings, bkashNumber: e.target.value })}
+                        onChange={(e) => updateShopSettingField({ bkashNumber: e.target.value })}
                         className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-cyan-400"
                       />
                     </div>
@@ -2529,7 +2433,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                         type="tel"
                         required
                         value={shopSettings.nagadNumber}
-                        onChange={(e) => setShopSettingsState({ ...shopSettings, nagadNumber: e.target.value })}
+                        onChange={(e) => updateShopSettingField({ nagadNumber: e.target.value })}
                         className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white font-mono text-sm focus:outline-none focus:border-cyan-400"
                       />
                     </div>
@@ -2610,7 +2514,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                       type="url"
                       required
                       value={shopSettings.facebookUrl}
-                      onChange={(e) => setShopSettingsState({ ...shopSettings, facebookUrl: e.target.value })}
+                      onChange={(e) => updateShopSettingField({ facebookUrl: e.target.value })}
                       placeholder="https://facebook.com/nextgenefootball01"
                       className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
                     />
@@ -2623,7 +2527,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                     <textarea
                       rows={2}
                       value={shopSettings.noticeText}
-                      onChange={(e) => setShopSettingsState({ ...shopSettings, noticeText: e.target.value })}
+                      onChange={(e) => updateShopSettingField({ noticeText: e.target.value })}
                       className="w-full px-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
                     />
                   </div>
@@ -2713,7 +2617,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                             type="text"
                             value={shopSettings.telegramBotToken || ""}
                             onChange={(e) =>
-                              setShopSettingsState({ ...shopSettings, telegramBotToken: e.target.value.trim() })
+                              updateShopSettingField({ telegramBotToken: e.target.value.trim() })
                             }
                             placeholder="যেমন: 7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxx"
                             className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sky-200 font-mono text-xs focus:outline-none focus:border-sky-400"
@@ -2752,9 +2656,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                                 const res = await autoDiscoverTelegramChatId(shopSettings.telegramBotToken || "");
                                 setDetectingChatId(false);
                                 if (res.ok && res.chatId) {
-                                  const updated = { ...shopSettings, telegramChatId: res.chatId };
-                                  setShopSettingsState(updated);
-                                  updateShopSettings(updated);
+                                  updateShopSettingField({ telegramChatId: res.chatId });
                                   setTelegramFeedback({
                                     ok: true,
                                     msg: `🎉 আপনার Telegram আইডি (${res.username}: ${res.chatId}) সফলভাবে সেভ হয়েছে! টেস্ট মেসেজ পাঠানো হচ্ছে...`,
@@ -2780,7 +2682,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                             type="text"
                             value={shopSettings.telegramChatId || ""}
                             onChange={(e) =>
-                              setShopSettingsState({ ...shopSettings, telegramChatId: e.target.value.trim() })
+                              updateShopSettingField({ telegramChatId: e.target.value.trim() })
                             }
                             placeholder="যেমন: 123456789"
                             className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sky-200 font-mono text-xs focus:outline-none focus:border-sky-400"
@@ -2901,7 +2803,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                           type="url"
                           value={shopSettings.discordWebhookUrl || ""}
                           onChange={(e) =>
-                            setShopSettingsState({ ...shopSettings, discordWebhookUrl: e.target.value.trim() })
+                            updateShopSettingField({ discordWebhookUrl: e.target.value.trim() })
                           }
                           placeholder="https://discord.com/api/webhooks/..."
                           className="flex-1 px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-xl text-indigo-200 font-mono text-xs focus:outline-none focus:border-indigo-400"
@@ -3006,7 +2908,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                               type="text"
                               value={shopSettings.greenApiIdInstance || "71072277414"}
                               onChange={(e) =>
-                                setShopSettingsState({ ...shopSettings, greenApiIdInstance: e.target.value.trim() })
+                                updateShopSettingField({ greenApiIdInstance: e.target.value.trim() })
                               }
                               placeholder="71072277414"
                               className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-emerald-200 font-mono text-xs focus:outline-none focus:border-emerald-400"
@@ -3021,7 +2923,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                               type="text"
                               value={shopSettings.greenApiApiToken || ""}
                               onChange={(e) =>
-                                setShopSettingsState({ ...shopSettings, greenApiApiToken: e.target.value.trim() })
+                                updateShopSettingField({ greenApiApiToken: e.target.value.trim() })
                               }
                               placeholder="ড্যাশবোর্ড থেকে টোকেন পেস্ট করুন..."
                               className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-emerald-200 font-mono text-xs focus:outline-none focus:border-emerald-400"
@@ -3036,7 +2938,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                               type="tel"
                               value={shopSettings.autoWhatsappPhone || "01629802989"}
                               onChange={(e) =>
-                                setShopSettingsState({ ...shopSettings, autoWhatsappPhone: e.target.value.trim() })
+                                updateShopSettingField({ autoWhatsappPhone: e.target.value.trim() })
                               }
                               placeholder="01629802989"
                               className="w-full px-3.5 py-2 bg-slate-900 border border-emerald-500/50 rounded-xl text-emerald-300 font-mono font-bold text-xs focus:outline-none focus:border-emerald-400"
@@ -3130,7 +3032,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                               type="tel"
                               value={shopSettings.autoWhatsappPhone || shopSettings.whatsapp || "01629802989"}
                               onChange={(e) =>
-                                setShopSettingsState({ ...shopSettings, autoWhatsappPhone: e.target.value })
+                                updateShopSettingField({ autoWhatsappPhone: e.target.value })
                               }
                               placeholder="01629802989"
                               className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white font-mono text-xs focus:outline-none focus:border-emerald-400"
@@ -3145,7 +3047,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                               type="text"
                               value={shopSettings.callmebotApiKey || ""}
                               onChange={(e) =>
-                                setShopSettingsState({ ...shopSettings, callmebotApiKey: e.target.value })
+                                updateShopSettingField({ callmebotApiKey: e.target.value })
                               }
                               placeholder="API Key..."
                               className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-emerald-300 font-mono text-xs focus:outline-none focus:border-emerald-400"
@@ -3161,7 +3063,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                             type="url"
                             value={shopSettings.whatsappWebhookUrl || ""}
                             onChange={(e) =>
-                              setShopSettingsState({ ...shopSettings, whatsappWebhookUrl: e.target.value })
+                              updateShopSettingField({ whatsappWebhookUrl: e.target.value })
                             }
                             placeholder="https://..."
                             className="w-full px-3.5 py-2 bg-slate-900 border border-slate-800 rounded-xl text-slate-300 font-mono text-xs focus:outline-none focus:border-emerald-400"
@@ -3500,15 +3402,250 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
         </div>
       )}
 
-      {/* Quick Chat Modal for an Order */}
-      {chatModalOrder && (
-        <LiveChatModal
-          onClose={() => setChatModalOrder(null)}
-          initialPhone={chatModalOrder.phone}
-          initialOrderNo={chatModalOrder.orderNo}
-          initialCustomerName={chatModalOrder.name}
-          isAdmin={true}
-        />
+      {/* Edit Order Products / Items Modal (Website Notification Only - No Email) */}
+      {editingOrderItems && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-slate-900 border-2 border-cyan-500/40 rounded-2xl p-5 sm:p-6 w-full max-w-xl space-y-4 shadow-2xl max-h-[92vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="font-extrabold text-white text-base flex items-center gap-2">
+                  <Edit2 className="w-4 h-4 text-cyan-400" />
+                  <span>অর্ডার #{editingOrderItems.orderNo} এর প্রোডাক্ট এডিট করুন</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  কাস্টমার: <b className="text-slate-200">{editingOrderItems.customerName}</b> ({editingOrderItems.phone})
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingOrderItems(null)}
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-cyan-950/30 border border-cyan-500/30 text-xs text-cyan-200 leading-relaxed">
+              💡 ইউজার যদি ভুল করে একাধিক প্রোডাক্ট অর্ডার করে বা কোনো প্রোডাক্ট বাদ দিতে চায়, তবে এখান থেকে প্রোডাক্ট বাদ দিন, সংখ্যা পরিবর্তন করুন বা নতুন প্রোডাক্ট যুক্ত করুন। সেভ করলে <b>শুধুমাত্র ওয়েবসাইটের নোটিফিকেশনে</b> আপডেট যাবে (কোনো ইমেইল পাঠানো হবে না)।
+            </div>
+
+            <form onSubmit={handleSaveEditedOrderItems} className="space-y-4">
+              {/* Current Items List */}
+              <div className="space-y-2.5">
+                <label className="text-xs font-extrabold text-slate-300 block">
+                  বর্তমান অর্ডারকৃত প্রোডাক্টসমূহ ({toBn(editingOrderItems.items.length)} টি):
+                </label>
+
+                {editingOrderItems.items.map((item, idx) => (
+                  <div
+                    key={`${item.id}_${idx}`}
+                    className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2.5 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <input
+                        type="text"
+                        required
+                        value={item.name}
+                        onChange={(e) => {
+                          const next = [...editingOrderItems.items];
+                          next[idx] = { ...next[idx], name: e.target.value };
+                          setEditingOrderItems({ ...editingOrderItems, items: next });
+                        }}
+                        className="flex-1 px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-white font-bold text-xs focus:outline-none focus:border-cyan-400"
+                        placeholder="প্রোডাক্টের নাম"
+                      />
+
+                      {editingOrderItems.items.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = editingOrderItems.items.filter((_, i) => i !== idx);
+                            setEditingOrderItems({ ...editingOrderItems, items: next });
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 font-bold text-[11px] flex items-center gap-1 cursor-pointer shrink-0"
+                          title="এই প্রোডাক্টটি অর্ডার থেকে বাদ দিন"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>বাদ দিন</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="text-[10px] text-slate-400 block mb-0.5">একক মূল্য (৳)</label>
+                        <input
+                          type="number"
+                          min={0}
+                          required
+                          value={item.price}
+                          onChange={(e) => {
+                            const next = [...editingOrderItems.items];
+                            next[idx] = { ...next[idx], price: Number(e.target.value) || 0 };
+                            setEditingOrderItems({ ...editingOrderItems, items: next });
+                          }}
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-emerald-300 font-mono font-bold text-xs"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] text-slate-400 block mb-0.5">কয়েন সংখ্যা</label>
+                        <input
+                          type="number"
+                          min={0}
+                          value={item.coins || 0}
+                          onChange={(e) => {
+                            const next = [...editingOrderItems.items];
+                            next[idx] = { ...next[idx], coins: Number(e.target.value) || 0 };
+                            setEditingOrderItems({ ...editingOrderItems, items: next });
+                          }}
+                          className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-amber-300 font-mono font-bold text-xs"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] text-slate-400 block mb-0.5">পরিমাণ (Quantity)</label>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = [...editingOrderItems.items];
+                              const q = Math.max(1, (next[idx].quantity || 1) - 1);
+                              next[idx] = { ...next[idx], quantity: q };
+                              setEditingOrderItems({ ...editingOrderItems, items: next });
+                            }}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+                          >
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="flex-1 text-center font-mono font-bold text-white">
+                            {toBn(item.quantity || 1)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = [...editingOrderItems.items];
+                              const q = (next[idx].quantity || 1) + 1;
+                              next[idx] = { ...next[idx], quantity: q };
+                              setEditingOrderItems({ ...editingOrderItems, items: next });
+                            }}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Add Another Product from Catalog */}
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <label className="text-xs font-bold text-cyan-300 block">
+                  ➕ ক্যাটালগ থেকে অন্য কোনো প্রোডাক্ট যোগ করুন:
+                </label>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={editingOrderItems.selectedAddProductId}
+                    onChange={(e) =>
+                      setEditingOrderItems({
+                        ...editingOrderItems,
+                        selectedAddProductId: e.target.value,
+                      })
+                    }
+                    className="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                  >
+                    {getCatalogProducts().map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} — ৳{toBn(p.price)} ({toBn(p.coins)} কয়েন)
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const found = getCatalogProducts().find(
+                        (p) => p.id === editingOrderItems.selectedAddProductId
+                      );
+                      if (!found) return;
+                      const newItem: CartItem = {
+                        id: found.id,
+                        name: found.name,
+                        price: found.price,
+                        coins: found.coins,
+                        quantity: 1,
+                        category: (found.category as any) || "regular",
+                        image: found.image,
+                      };
+                      setEditingOrderItems({
+                        ...editingOrderItems,
+                        items: [...editingOrderItems.items, newItem],
+                      });
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/40 text-cyan-300 font-extrabold text-xs cursor-pointer shrink-0"
+                  >
+                    + যুক্ত করুন
+                  </button>
+                </div>
+              </div>
+
+              {/* Admin Note for Customer Notification */}
+              <div>
+                <label className="text-xs font-bold text-slate-300 block mb-1">
+                  কাস্টমারের নোটিফিকেশনের জন্য নোট (ঐচ্ছিক):
+                </label>
+                <input
+                  type="text"
+                  value={editingOrderItems.adminNote}
+                  onChange={(e) =>
+                    setEditingOrderItems({ ...editingOrderItems, adminNote: e.target.value })
+                  }
+                  placeholder="যেমন: আপনার অনুরোধ অনুযায়ী ২টি প্রোডাক্ট বাদ দিয়ে ১টি রাখা হয়েছে"
+                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-cyan-400"
+                />
+              </div>
+
+              {/* Summary Footer */}
+              <div className="p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-500/30 flex items-center justify-between text-xs">
+                <span className="text-slate-300 font-semibold">নতুন সর্বমোট মূল্য ও কয়েন:</span>
+                <span className="font-mono font-black text-sm text-emerald-400">
+                  ৳{" "}
+                  {toBn(
+                    editingOrderItems.items.reduce(
+                      (s, i) => s + Number(i.price || 0) * (Number(i.quantity) || 1),
+                      0
+                    )
+                  )}{" "}
+                  (
+                  {toBn(
+                    editingOrderItems.items.reduce(
+                      (s, i) => s + Number(i.coins || 0) * (Number(i.quantity) || 1),
+                      0
+                    )
+                  )}{" "}
+                  কয়েন)
+                </span>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingOrderItems(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold cursor-pointer"
+                >
+                  বাতিল
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black font-extrabold text-xs cursor-pointer shadow-lg shadow-cyan-500/20"
+                >
+                  ✅ অর্ডার আপডেট ও ওয়েবসাইট নোটিফিকেশন পাঠান
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );
