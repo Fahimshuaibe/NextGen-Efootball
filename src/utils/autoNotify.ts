@@ -250,8 +250,15 @@ export async function sendAutomaticAdminOrderAlert(order: Order): Promise<{
   if (settings.greenApiIdInstance?.trim() && settings.greenApiApiToken?.trim()) {
     const greenId = settings.greenApiIdInstance.trim();
     const greenToken = settings.greenApiApiToken.trim();
-    let targetPhone = (settings.autoWhatsappPhone || settings.whatsapp || "01629802989").replace(/\D/g, "");
-    if (targetPhone.startsWith("01")) targetPhone = "88" + targetPhone;
+    let targetChatId = "";
+    const rawTarget = String(settings.autoWhatsappPhone || settings.whatsapp || "01629802989").trim();
+    if (rawTarget.includes("@g.us") || rawTarget.includes("@c.us")) {
+      targetChatId = rawTarget;
+    } else {
+      let cleanPhone = rawTarget.replace(/\D/g, "");
+      if (cleanPhone.startsWith("01")) cleanPhone = "88" + cleanPhone;
+      targetChatId = `${cleanPhone}@c.us`;
+    }
 
     try {
       const res = await fetch("/api/notify-whatsapp-green", {
@@ -260,7 +267,7 @@ export async function sendAutomaticAdminOrderAlert(order: Order): Promise<{
         body: JSON.stringify({
           idInstance: greenId,
           apiTokenInstance: greenToken,
-          phone: targetPhone,
+          phone: targetChatId,
           message,
         }),
       });
@@ -275,7 +282,7 @@ export async function sendAutomaticAdminOrderAlert(order: Order): Promise<{
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              chatId: `${targetPhone}@c.us`,
+              chatId: targetChatId,
               message,
             }),
           }
@@ -527,9 +534,14 @@ export async function sendTestGreenApiAlert(
     return { ok: false, message: "দয়া করে Green-API IdInstance এবং ApiToken উভয়টি দিন।" };
   }
 
-  let cleanPhone = (phone || "01629802989").replace(/\D/g, "");
-  if (cleanPhone.startsWith("01")) {
-    cleanPhone = "88" + cleanPhone;
+  let targetChatId = "";
+  const rawTarget = String(phone || "01629802989").trim();
+  if (rawTarget.includes("@g.us") || rawTarget.includes("@c.us")) {
+    targetChatId = rawTarget;
+  } else {
+    let cleanPhone = rawTarget.replace(/\D/g, "");
+    if (cleanPhone.startsWith("01")) cleanPhone = "88" + cleanPhone;
+    targetChatId = `${cleanPhone}@c.us`;
   }
 
   const testMsg = [
@@ -545,7 +557,7 @@ export async function sendTestGreenApiAlert(
       body: JSON.stringify({
         idInstance: id,
         apiTokenInstance: token,
-        phone: cleanPhone,
+        phone: targetChatId,
         message: testMsg,
       }),
     });
@@ -600,7 +612,7 @@ export async function sendTestGreenApiAlert(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          chatId: `${cleanPhone}@c.us`,
+          chatId: targetChatId,
           message: testMsg,
         }),
       }

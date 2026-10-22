@@ -227,9 +227,16 @@ async function startServer() {
         });
       }
 
-      let cleanPhone = (phone || "01629802989").replace(/\D/g, "");
-      if (cleanPhone.startsWith("01")) {
-        cleanPhone = "88" + cleanPhone;
+      let targetChatId = "";
+      const rawTarget = String(phone || "01629802989").trim();
+      if (rawTarget.includes("@g.us") || rawTarget.includes("@c.us")) {
+        targetChatId = rawTarget;
+      } else {
+        let cleanPhone = rawTarget.replace(/\D/g, "");
+        if (cleanPhone.startsWith("01")) {
+          cleanPhone = "88" + cleanPhone;
+        }
+        targetChatId = `${cleanPhone}@c.us`;
       }
 
       const url = `https://api.green-api.com/waInstance${encodeURIComponent(
@@ -240,7 +247,7 @@ async function startServer() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          chatId: `${cleanPhone}@c.us`,
+          chatId: targetChatId,
           message,
         }),
       });

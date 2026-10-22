@@ -114,7 +114,7 @@ const DEFAULT_SHOP_SETTINGS: ShopSettings = {
   telegramBotToken: "",
   telegramChatId: "",
   discordWebhookUrl: "",
-  greenApiIdInstance: "",
+  greenApiIdInstance: "71072277414",
   greenApiApiToken: ""
 };
 

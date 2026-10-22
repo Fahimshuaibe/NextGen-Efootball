@@ -2722,18 +2722,34 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                           </ol>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 pt-1">
+                        <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-300 space-y-1">
+                          <p className="font-bold flex items-center gap-1 text-amber-200">
+                            <span>🔔 কেন নোটিফিকেশন সাউন্ড বা রিংটোন আসেনি?</span>
+                          </p>
+                          <p className="text-slate-300 leading-relaxed">
+                            আপনি যে নম্বর দিয়ে QR স্ক্যান করেছেন, সেই একই নম্বরে মেসেজ পাঠালে WhatsApp সেটিকে <b>"Message yourself" (নিজের পাঠানো নোট)</b> মনে করে এবং <b>কোনো সাউন্ড বা ব্যানার নোটিফিকেশন দেয় না</b> (মেসেজটি সাইলেন্টলি চ্যাটে চলে আসে, যা আপনার স্ক্রিনশটেও সফলভাবে দেখা যাচ্ছে)।
+                          </p>
+                          <div className="text-slate-300 leading-relaxed pt-0.5 space-y-1">
+                            <p className="font-semibold text-emerald-300">💡 সাউন্ড অ্যালার্ট পাওয়ার সহজ উপায়:</p>
+                            <ul className="list-disc list-inside space-y-0.5 text-slate-300">
+                              <li><b>উপায় ১:</b> গ্রিন-এপিআই ড্যাশবোর্ডে <b>অন্য কোনো সিম/ফোনের WhatsApp দিয়ে QR স্ক্যান করুন</b> (সেটি প্রেরক বট হবে), আর নিচের নম্বরের ঘরে আপনার আসল পার্সোনাল নম্বর দিন। তাহলে প্রতিটি অর্ডারে আপনার ফোনে জোরে রিংটোন বেজে উঠবে!</li>
+                              <li><b>উপায় ২:</b> অথবা সবচেয়ে সেরা হলো উপরের <b>Telegram Bot</b> ব্যবহার করা — টেলিগ্রাম যেকোনো অর্ডারে সাথে সাথে স্ক্রিন জ্বালিয়ে ১০০% নির্ভরযোগ্য সাউন্ড নোটিফিকেশন দেয়!</li>
+                            </ul>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1">
                           <div>
                             <label className="block text-[11px] font-bold text-emerald-200 mb-1">
                               Green-API IdInstance
                             </label>
                             <input
                               type="text"
-                              value={shopSettings.greenApiIdInstance || ""}
+                              value={shopSettings.greenApiIdInstance || "71072277414"}
                               onChange={(e) =>
                                 setShopSettingsState({ ...shopSettings, greenApiIdInstance: e.target.value.trim() })
                               }
-                              placeholder="যেমন: 1101xxxxxx বা 7107xxxxxx"
+                              placeholder="71072277414"
                               className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-emerald-200 font-mono text-xs focus:outline-none focus:border-emerald-400"
                             />
                           </div>
@@ -2748,10 +2764,33 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                               onChange={(e) =>
                                 setShopSettingsState({ ...shopSettings, greenApiApiToken: e.target.value.trim() })
                               }
-                              placeholder="যেমন: 7a9e58d821354..."
+                              placeholder="ড্যাশবোর্ড থেকে টোকেন পেস্ট করুন..."
                               className="w-full px-3.5 py-2 bg-slate-900 border border-slate-700 rounded-xl text-emerald-200 font-mono text-xs focus:outline-none focus:border-emerald-400"
                             />
                           </div>
+
+                          <div>
+                            <label className="block text-[11px] font-bold text-emerald-200 mb-1">
+                              📱 প্রাপক নম্বর (যেখানে রিংটোন বাজবে)
+                            </label>
+                            <input
+                              type="tel"
+                              value={shopSettings.autoWhatsappPhone || "01629802989"}
+                              onChange={(e) =>
+                                setShopSettingsState({ ...shopSettings, autoWhatsappPhone: e.target.value.trim() })
+                              }
+                              placeholder="01629802989"
+                              className="w-full px-3.5 py-2 bg-slate-900 border border-emerald-500/50 rounded-xl text-emerald-300 font-mono font-bold text-xs focus:outline-none focus:border-emerald-400"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-[11px] text-slate-300 space-y-1">
+                          <p className="font-bold text-emerald-300">✅ ২টি আলাদা নম্বরের নিয়ম:</p>
+                          <p className="text-slate-300 leading-relaxed">
+                            ১. <b>প্রেরক (বট):</b> Green-API তে যে অন্য নম্বর দিয়ে QR স্ক্যান করছেন।<br />
+                            ২. <b>প্রাপক (আপনি):</b> উপরের ঘরে দেওয়া আপনার আসল নম্বর (<b>{shopSettings.autoWhatsappPhone || "01629802989"}</b>)। অন্য নম্বর থেকে আপনার নম্বরে মেসেজ আসলেই WhatsApp-এ সাথে সাথে <b>জোরে রিংটোন ও পপআপ নোটিফিকেশন</b> বাজবে!
+                          </p>
                         </div>
 
                         {greenApiFeedback && (
@@ -2778,10 +2817,11 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                             type="button"
                             disabled={checkingGreenApiStatus || !shopSettings.greenApiIdInstance?.trim()}
                             onClick={async () => {
+                              updateShopSettings(shopSettings);
                               setCheckingGreenApiStatus(true);
                               setGreenApiFeedback(null);
                               const res = await checkGreenApiInstanceStatus(
-                                shopSettings.greenApiIdInstance || "",
+                                shopSettings.greenApiIdInstance || "71072277414",
                                 shopSettings.greenApiApiToken || ""
                               );
                               setCheckingGreenApiStatus(false);
@@ -2799,9 +2839,9 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
                               setTestingGreenApi(true);
                               setGreenApiFeedback(null);
                               const res = await sendTestGreenApiAlert(
-                                shopSettings.greenApiIdInstance || "",
+                                shopSettings.greenApiIdInstance || "71072277414",
                                 shopSettings.greenApiApiToken || "",
-                                shopSettings.autoWhatsappPhone || shopSettings.whatsapp || "01629802989"
+                                shopSettings.autoWhatsappPhone || "01629802989"
                               );
                               setTestingGreenApi(false);
                               setGreenApiFeedback({ ok: res.ok, msg: res.message });
