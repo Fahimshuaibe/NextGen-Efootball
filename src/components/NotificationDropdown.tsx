@@ -6,6 +6,10 @@ import {
   markAllNotificationsAsRead,
   deleteAppNotification,
   getOrderById,
+  getActiveUserAccount,
+  getActiveCustomerPhone,
+  normalizePhoneKey,
+  WELCOME_NOTIFICATION,
 } from "../utils/storage";
 import {
   Bell,
@@ -42,15 +46,48 @@ export function NotificationDropdown({
 
   const loadNotifications = () => {
     const all = getAppNotifications();
-    // Filter for active user/phone: show announcements/offers to everyone,
-    // and show order notifications if they match targetPhone or if no phone filter is strict
-    const userClean = (activePhone || "").replace(/\D/g, "");
+    const activeUser = getActiveUserAccount();
+    const effectivePhone = activeUser?.phone || getActiveCustomerPhone() || activePhone || "";
+    const userClean = normalizePhoneKey(effectivePhone);
+
+    // Brand-new visitor (not logged in and no active customer phone on this device):
+    // Show ONLY the Welcome notification
+    if (!userClean && !activeUser) {
+      const welcomeOnly = all.filter((n) => n.id === WELCOME_NOTIFICATION.id);
+      setNotifications(welcomeOnly.length > 0 ? welcomeOnly : [WELCOME_NOTIFICATION]);
+      return;
+    }
+
+    // Returning / logged-in user: show ONLY their own order notifications + Welcome/global announcements
     const filtered = all.filter((n) => {
-      if (!n.targetPhone) return true; // Global announcement or offer
-      if (!userClean) return true; // If no active phone, still show recent orders
-      const notifPhone = n.targetPhone.replace(/\D/g, "");
-      return notifPhone.includes(userClean) || userClean.includes(notifPhone);
+      const isOrderNotif =
+        Boolean(n.targetPhone) ||
+        Boolean(n.orderNo) ||
+        n.type === "order_created" ||
+        n.type === "order_processing" ||
+        n.type === "order_completed" ||
+        n.type === "order_cancelled" ||
+        n.type === "order_updated";
+
+      if (!isOrderNotif) {
+        return true; // Global welcome or admin announcement
+      }
+
+      const linkedOrder = n.orderNo ? getOrderById(n.orderNo) : undefined;
+
+      // Match by logged-in userId if available
+      if (activeUser?.id && linkedOrder?.userId && linkedOrder.userId === activeUser.id) {
+        return true;
+      }
+
+      // Match strictly by normalized phone number
+      const notifPhoneClean = normalizePhoneKey(n.targetPhone || linkedOrder?.phone || "");
+      if (!notifPhoneClean || !userClean) {
+        return false;
+      }
+      return notifPhoneClean === userClean;
     });
+
     setNotifications(filtered);
   };
 
@@ -59,9 +96,13 @@ export function NotificationDropdown({
     const handleUpdate = () => loadNotifications();
     window.addEventListener("nextgen_app_notifications_changed", handleUpdate);
     window.addEventListener("nextgen_orders_updated", handleUpdate);
+    window.addEventListener("nextgen_user_account_updated", handleUpdate);
+    window.addEventListener("nextgen_customer_phone_changed", handleUpdate);
     return () => {
       window.removeEventListener("nextgen_app_notifications_changed", handleUpdate);
       window.removeEventListener("nextgen_orders_updated", handleUpdate);
+      window.removeEventListener("nextgen_user_account_updated", handleUpdate);
+      window.removeEventListener("nextgen_customer_phone_changed", handleUpdate);
     };
   }, [activePhone]);
 
@@ -199,7 +240,7 @@ export function NotificationDropdown({
               {unreadCount > 0 && (
                 <button
                   type="button"
-                  onClick={() => markAllNotificationsAsRead()}
+                  onClick={() => markAllNotificationsAsRead(notifications.map((n) => n.id))}
                   className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[10px] font-bold cursor-pointer transition"
                   title="সব নোটিফিকেশন পড়া হয়েছে হিসেবে চিহ্নিত করুন"
                 >

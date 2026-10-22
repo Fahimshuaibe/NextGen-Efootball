@@ -428,6 +428,7 @@ export function setActiveUserAccount(userId: string | null): void {
   try {
     if (!userId) {
       localStorage.removeItem(ACTIVE_USER_ID_KEY);
+      setActiveCustomerPhone("");
     } else {
       localStorage.setItem(ACTIVE_USER_ID_KEY, userId);
       const users = getRegisteredUsers();

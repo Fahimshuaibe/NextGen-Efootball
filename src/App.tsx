@@ -65,6 +65,7 @@ import { CustomerAccountModal } from "./components/CustomerAccountModal";
 import { AdminPanel } from "./components/AdminPanel";
 import { PaymentLogoBadge } from "./components/PaymentLogoBadge";
 import { NotificationDropdown } from "./components/NotificationDropdown";
+import { HowToOrderVideoModal } from "./components/HowToOrderVideoModal";
 import { sendAutomaticAdminOrderAlert, sendCustomerOrderPlacedEmail } from "./utils/autoNotify";
 import { 
   Check, 
@@ -175,6 +176,7 @@ export default function App() {
   const [showAccountModal, setShowAccountModal] = useState(false);
   const [accountModalSection, setAccountModalSection] = useState<"dashboard" | "orders" | "details" | "verify">("dashboard");
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [showHowToOrderModal, setShowHowToOrderModal] = useState(false);
 
   const [activeTab, setActiveTab] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -1065,14 +1067,18 @@ export default function App() {
 
         {/* CATEGORY NAVIGATOR CARDS (Screenshot Box Style) */}
         <div className="space-y-2.5">
-          <div className="flex items-center justify-between px-1">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
             <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
               <span>প্যাকেজ ক্যাটাগরি (সহজে যেতে ক্লিক করুন):</span>
             </span>
-            <span className="text-[11px] text-cyan-400 font-semibold hidden sm:inline">
-              যেকোনো ঘরে ক্লিক করলে সরাসরি সেই সেকশনে নিয়ে যাবে
-            </span>
+            <button
+              type="button"
+              onClick={() => setShowHowToOrderModal(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-cyan-500/20 to-emerald-500/20 hover:from-cyan-500/30 hover:to-emerald-500/30 border border-cyan-400/50 text-cyan-300 text-xs font-extrabold transition cursor-pointer shadow-sm"
+            >
+              <span>🎬 কিভাবে অর্ডার করবেন? (ভিডিও দেখুন)</span>
+            </button>
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3.5">
@@ -1475,14 +1481,23 @@ export default function App() {
           <div className="absolute top-0 right-0 w-80 h-80 bg-cyan-500/5 rounded-full blur-3xl pointer-events-none" />
 
           {/* Form Header */}
-          <div className="border-b border-slate-800 pb-3 mb-4">
-            <h2 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
-              <ShoppingCart className="w-5 h-5 text-cyan-400" />
-              <span>সহজ অর্ডার ফরম (Order Form)</span>
-            </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              কয়েন বা প্যাক সিলেক্ট করে নিচের তথ্য পূরণ করে সহজে অর্ডার করুন
-            </p>
+          <div className="border-b border-slate-800 pb-3 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div>
+              <h2 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
+                <ShoppingCart className="w-5 h-5 text-cyan-400" />
+                <span>সহজ অর্ডার ফরম (Order Form)</span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                কয়েন বা প্যাক সিলেক্ট করে নিচের তথ্য পূরণ করে সহজে অর্ডার করুন
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowHowToOrderModal(true)}
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 text-cyan-300 text-xs font-extrabold transition cursor-pointer shrink-0"
+            >
+              <span>🎬 কিভাবে অর্ডার করবেন? (ভিডিও টিউটোরিয়াল)</span>
+            </button>
           </div>
 
           {/* Selected Package / Cart Box + Quick Selector */}
@@ -2700,6 +2715,15 @@ export default function App() {
           onClose={() => setShowAdminPanel(false)}
           onViewReceipt={(ord) => {
             setActiveReceiptOrder(ord);
+          }}
+        />
+      )}
+
+      {showHowToOrderModal && (
+        <HowToOrderVideoModal
+          onClose={() => setShowHowToOrderModal(false)}
+          onStartOrderNow={() => {
+            document.getElementById("order-section")?.scrollIntoView({ behavior: "smooth" });
           }}
         />
       )}
