@@ -48,6 +48,27 @@ async function startServer() {
 
   app.use(express.json({ limit: "10mb" }));
 
+  // SEO & Security Headers Middleware (prevents indexing of sensitive API/Admin/Order/OTP paths)
+  app.use((req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    const p = req.path.toLowerCase();
+    if (
+      p.startsWith("/api") ||
+      p.startsWith("/admin") ||
+      p.startsWith("/account") ||
+      p.startsWith("/checkout") ||
+      p.startsWith("/payment") ||
+      p.startsWith("/receipt") ||
+      p.startsWith("/track") ||
+      p.startsWith("/otp") ||
+      p.startsWith("/login")
+    ) {
+      res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet");
+    }
+    next();
+  });
+
   // Persistent Server-Side State Sync Endpoints (ensures data never resets on browser refresh)
   app.get("/api/state", (_req, res) => {
     const rawState = readServerStateFromDisk();

@@ -1,0 +1,22 @@
+# robots.txt for NextGen Efootball (https://www.nextgenefootball.store)
+User-agent: *
+Allow: /
+Allow: /player-packs
+Allow: /coin-combos
+Allow: /regular-coins
+Allow: /how-to-order
+Allow: /faq
+
+# Prevent indexing of sensitive customer, order, payment, OTP, and admin routes
+Disallow: /api/
+Disallow: /admin
+Disallow: /account
+Disallow: /checkout
+Disallow: /payment
+Disallow: /receipt
+Disallow: /track
+Disallow: /otp
+Disallow: /login
+
+Sitemap: https://www.nextgenefootball.store/sitemap.xml
+Host: https://www.nextgenefootball.store

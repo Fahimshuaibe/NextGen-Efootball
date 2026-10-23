@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <url>
+    <loc>https://www.nextgenefootball.store/</loc>
+    <lastmod>2026-10-23</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+    <xhtml:link rel="alternate" hreflang="bn-bd" href="https://www.nextgenefootball.store/" />
+    <xhtml:link rel="alternate" hreflang="en-bd" href="https://www.nextgenefootball.store/" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://www.nextgenefootball.store/" />
+    <image:image>
+      <image:loc>https://www.nextgenefootball.store/assets/aistudio/20260627_002155_69284c16.png</image:loc>
+      <image:title>NextGen Efootball — Official eFootball Coin Top Up Bangladesh</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.nextgenefootball.store/player-packs</loc>
+    <lastmod>2026-10-23</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+    <image:image>
+      <image:loc>https://www.nextgenefootball.store/assets/aistudio/combo_suarez_casillas.png</image:loc>
+      <image:title>eFootball 2026 Luis Suárez &amp; Iker Casillas Player Packs Bangladesh</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.nextgenefootball.store/coin-combos</loc>
+    <lastmod>2026-10-23</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://www.nextgenefootball.store/regular-coins</loc>
+    <lastmod>2026-10-23</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://www.nextgenefootball.store/how-to-order</loc>
+    <lastmod>2026-10-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://www.nextgenefootball.store/faq</loc>
+    <lastmod>2026-10-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+</urlset>

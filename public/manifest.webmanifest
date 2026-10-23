@@ -1,0 +1,19 @@
+{
+  "name": "NextGen Efootball — eFootball Coin Top Up BD",
+  "short_name": "NextGen Efootball",
+  "description": "NextGen Efootball বাংলাদেশে বিশ্বস্ত eFootball 2026 কয়েন টপ-আপ, কম্বো অফার ও লুইস সুয়ারেজ/ক্যাসিয়াস প্লেয়ার প্যাক স্টোর।",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#070d1d",
+  "theme_color": "#070d1d",
+  "lang": "bn-BD",
+  "icons": [
+    {
+      "src": "/assets/aistudio/20260627_002155_69284c16.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

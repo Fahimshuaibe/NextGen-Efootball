@@ -66,6 +66,8 @@ import { AdminPanel } from "./components/AdminPanel";
 import { PaymentLogoBadge } from "./components/PaymentLogoBadge";
 import { NotificationDropdown } from "./components/NotificationDropdown";
 import { HowToOrderVideoModal } from "./components/HowToOrderVideoModal";
+import { SeoContentSection } from "./components/SeoContentSection";
+import { resolveSeoViewKey, getSeoMetaForView, applySeoMetaToDom } from "./utils/seo";
 import { sendAutomaticAdminOrderAlert, sendCustomerOrderPlacedEmail } from "./utils/autoNotify";
 import { 
   Check, 
@@ -199,6 +201,59 @@ export default function App() {
     const timer = setInterval(() => setNowTick(Date.now()), 30000);
     return () => clearInterval(timer);
   }, []);
+
+  // Handle initial clean URL path routing (/player-packs, /coin-combos, /regular-coins, /how-to-order, /faq, /track, /account, /admin)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const path = window.location.pathname.toLowerCase();
+    if (path.startsWith("/player-packs")) {
+      setActiveTab("player_pack");
+    } else if (path.startsWith("/coin-combos")) {
+      setActiveTab("combo");
+    } else if (path.startsWith("/regular-coins")) {
+      setActiveTab("regular");
+    } else if (path.startsWith("/how-to-order")) {
+      setShowHowToOrderModal(true);
+    } else if (path.startsWith("/faq")) {
+      setTimeout(() => {
+        document.getElementById("seo-faq-guide")?.scrollIntoView({ behavior: "smooth" });
+      }, 150);
+    } else if (path.startsWith("/track")) {
+      setShowTrackModal(true);
+    } else if (path.startsWith("/account") || path.startsWith("/login")) {
+      setShowAccountModal(true);
+    } else if (path.startsWith("/admin")) {
+      setShowAdminPanel(true);
+    }
+  }, []);
+
+  // Dynamically update Title, Meta Description, Canonical URL, OpenGraph, Robots (noindex on sensitive views), and JSON-LD
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const viewKey = resolveSeoViewKey({
+      pathname: window.location.pathname,
+      activeTab,
+      orderStep,
+      showAdminPanel,
+      showAccountModal,
+      showTrackModal,
+      hasActiveReceipt: Boolean(activeReceiptOrder),
+      hasSuccessOrder: Boolean(successOrder),
+      showHowToOrderModal,
+    });
+    const meta = getSeoMetaForView(viewKey, window.location.pathname);
+    applySeoMetaToDom(meta, catalogProducts);
+  }, [
+    activeTab,
+    orderStep,
+    showAdminPanel,
+    showAccountModal,
+    showTrackModal,
+    activeReceiptOrder,
+    successOrder,
+    showHowToOrderModal,
+    catalogProducts,
+  ]);
 
   useEffect(() => {
     const handleStatusUpdate = (e: any) => {
@@ -813,26 +868,50 @@ export default function App() {
         </div>
       </div>
 
+      {/* Accessibility Skip Link */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:rounded-xl focus:bg-cyan-500 focus:text-black focus:font-extrabold"
+      >
+        মূল কন্টেন্টে যান (Skip to main content)
+      </a>
+
       {/* MAIN NAVBAR */}
       <header className="sticky top-0 z-40 bg-slate-950/90 backdrop-blur-md border-b border-slate-800/80 px-4 py-3 w-full">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
           {/* Logo & Brand (Full clear visibility for NextGen Efootball) */}
           <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="relative shrink-0">
+            <a
+              href="/"
+              onClick={(e) => {
+                e.preventDefault();
+                setActiveTab("all");
+                if (window.location.pathname !== "/") {
+                  window.history.pushState({}, "", "/");
+                }
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+              className="relative shrink-0 block"
+              aria-label={`${shopSettings.siteName} হোমপেজ`}
+            >
               <img
                 src={SITE.logo}
-                alt={shopSettings.siteName}
+                alt={`${shopSettings.siteName} লোগো — eFootball Coin Top Up Bangladesh`}
+                width={44}
+                height={44}
+                fetchPriority="high"
+                decoding="async"
                 className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl object-contain bg-slate-900 border border-cyan-500/30 shadow-md shadow-cyan-500/20"
               />
               <span className="absolute -bottom-1 -right-1 px-1 py-0.2 rounded text-[8px] font-black bg-cyan-500 text-black uppercase">
                 26
               </span>
-            </div>
+            </a>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-black text-white text-base sm:text-xl tracking-tight leading-tight">
+                <h1 className="font-black text-white text-base sm:text-xl tracking-tight leading-tight m-0">
                   {shopSettings.siteName}
-                </span>
+                </h1>
                 <span
                   className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${
                     isAdminOnline
@@ -898,8 +977,9 @@ export default function App() {
         </div>
       </header>
 
+      <main id="main-content" className="flex-1 flex flex-col w-full">
       {/* OFFERS & PACKAGES SHOWCASE */}
-      <section id="packages-showcase-section" className="relative z-10 max-w-6xl mx-auto px-4 pt-5 pb-10 space-y-6 w-full scroll-mt-20">
+      <section id="packages-showcase-section" aria-label="eFootball কয়েন ও প্লেয়ার প্যাক তালিকা" className="relative z-10 max-w-6xl mx-auto px-4 pt-5 pb-10 space-y-6 w-full scroll-mt-20">
         {/* TOP SEARCH, CATEGORY & SORT FILTER BAR (With Live Smart Search Dropdown) */}
         <div className="p-3 sm:p-3.5 rounded-2xl bg-slate-900/95 border border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shadow-lg relative z-30">
           {/* Category Quick Select */}
@@ -1302,7 +1382,11 @@ export default function App() {
                             <div className="relative overflow-hidden rounded-xl bg-slate-950 aspect-video flex items-center justify-center border border-slate-800">
                               <img
                                 src={prod.image}
-                                alt={prod.name}
+                                alt={`${prod.name} — NextGen Efootball eFootball 2026 Bangladesh`}
+                                width={640}
+                                height={360}
+                                loading="lazy"
+                                decoding="async"
                                 className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
                               />
                               <div className="absolute top-2 left-2 right-2 flex items-center justify-between gap-1.5 flex-wrap">
@@ -1475,7 +1559,7 @@ export default function App() {
       </section>
 
       {/* CHECKOUT & ORDER FORM SECTION */}
-      <section id="order-section" className="relative z-10 max-w-4xl mx-auto px-4 pb-16 w-full">
+      <section id="order-section" aria-labelledby="order-form-heading" data-nosnippet className="relative z-10 max-w-4xl mx-auto px-4 pb-12 w-full">
         <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-7 shadow-2xl relative overflow-hidden">
           {/* Subtle Cyber Grid Accent */}
           <div className="absolute top-0 right-0 w-80 h-80 bg-cyan-500/5 rounded-full blur-3xl pointer-events-none" />
@@ -1483,7 +1567,7 @@ export default function App() {
           {/* Form Header */}
           <div className="border-b border-slate-800 pb-3 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
             <div>
-              <h2 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
+              <h2 id="order-form-heading" className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
                 <ShoppingCart className="w-5 h-5 text-cyan-400" />
                 <span>সহজ অর্ডার ফরম (Order Form)</span>
               </h2>
@@ -2450,20 +2534,31 @@ export default function App() {
         </div>
       </section>
 
+      {/* BILINGUAL SEO CONTENT & FAQ SECTION */}
+      <SeoContentSection
+        onNavigateCategory={(catId, secId) => {
+          setActiveTab(catId);
+          setTimeout(() => {
+            document.getElementById(secId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 50);
+        }}
+        onOpenHowToOrder={() => setShowHowToOrderModal(true)}
+      />
+
       {/* BOTTOM WHATSAPP SUPPORT BANNER */}
-      <section className="max-w-4xl mx-auto px-3 sm:px-4 pb-6 w-full relative z-10">
+      <section aria-label="WhatsApp কাস্টমার সাপোর্ট" className="max-w-4xl mx-auto px-3 sm:px-4 pb-6 w-full relative z-10">
         <div className="rounded-3xl bg-gradient-to-r from-emerald-950/80 via-[#0b1829] to-teal-950/80 border border-emerald-500/30 p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl">
           <div className="flex items-center gap-3.5 text-center sm:text-left flex-col sm:flex-row">
             <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center shrink-0">
               <MessageSquare className="w-6 h-6 text-emerald-400" />
             </div>
             <div>
-              <h3 className="text-sm sm:text-base font-black text-white flex items-center justify-center sm:justify-start gap-2">
+              <h2 className="text-sm sm:text-base font-black text-white flex items-center justify-center sm:justify-start gap-2">
                 <span>WhatsApp Support</span>
                 <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold">
                   Fast Reply
                 </span>
-              </h3>
+              </h2>
               <p className="text-xs text-slate-300 mt-0.5">
                 অর্ডার সংক্রান্ত যেকোনো সাহায্য বা সমস্যায় সরাসরি আমাদের WhatsApp-এ মেসেজ দিন।
               </p>
@@ -2481,54 +2576,143 @@ export default function App() {
           </a>
         </div>
       </section>
+      </main>
 
       {/* FOOTER */}
-      <footer className="mt-auto border-t border-slate-800/80 bg-slate-950 px-4 pt-8 pb-28 relative z-10 text-xs text-slate-400 w-full">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <img src={SITE.logo} alt="NextGen" className="w-9 h-9 rounded-xl object-contain bg-slate-900 border border-slate-800" />
-            <div>
-              <p className="font-bold text-white text-sm">{shopSettings.siteName} — eFootball Hub</p>
-              <p className="text-[11px] text-slate-500">অফিসিয়াল কয়েন টপ-আপ ও প্লেয়ার প্যাক প্ল্যাটফর্ম</p>
+      <footer role="contentinfo" className="mt-auto border-t border-slate-800/80 bg-slate-950 px-4 pt-8 pb-28 relative z-10 text-xs text-slate-400 w-full">
+        <div className="max-w-6xl mx-auto flex flex-col gap-5">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <img
+                src={SITE.logo}
+                alt={`${shopSettings.siteName} ফুটার লোগো`}
+                width={36}
+                height={36}
+                loading="lazy"
+                decoding="async"
+                className="w-9 h-9 rounded-xl object-contain bg-slate-900 border border-slate-800"
+              />
+              <div>
+                <p className="font-bold text-white text-sm">{shopSettings.siteName} — eFootball Hub Bangladesh</p>
+                <p className="text-[11px] text-slate-400">অফিসিয়াল কয়েন টপ-আপ ও প্লেয়ার প্যাক প্ল্যাটফর্ম • Official eFootball Coin Store BD</p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center gap-4 text-xs font-semibold">
+              <a
+                href={`https://wa.me/${formatBdWhatsappForUrl(shopSettings.adminWhatsapp || shopSettings.whatsapp)}?text=${encodeURIComponent("আসসালামু আলাইকুম NextGen Efootball, আমার হেল্প ও সাপোর্ট প্রয়োজন।")}`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 flex items-center gap-1.5 transition"
+              >
+                <MessageSquare className="w-4 h-4" />
+                <span>WhatsApp Support</span>
+              </a>
+
+              <a
+                href="https://facebook.com/nextgenefootball01"
+                target="_blank"
+                rel="noreferrer"
+                className="hover:text-cyan-300 transition"
+              >
+                Facebook Page
+              </a>
+
+              <button
+                onClick={() => {
+                  setAccountModalSection("dashboard");
+                  setShowAccountModal(true);
+                }}
+                className="hover:text-white transition cursor-pointer"
+              >
+                আমার অ্যাকাউন্ট
+              </button>
+
+              <button
+                onClick={() => setShowTrackModal(true)}
+                className="hover:text-white transition cursor-pointer"
+              >
+                ট্র্যাক অর্ডার
+              </button>
+
+              <button
+                onClick={() => setShowAdminPanel(true)}
+                className="hover:text-cyan-400 transition cursor-pointer flex items-center gap-1"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>অ্যাডমিন লগইন</span>
+              </button>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-4 text-xs font-semibold">
-            <a
-              href={`https://wa.me/${formatBdWhatsappForUrl(shopSettings.adminWhatsapp || shopSettings.whatsapp)}?text=${encodeURIComponent("আসসালামু আলাইকুম NextGen Efootball, আমার হেল্প ও সাপোর্ট প্রয়োজন।")}`}
-              target="_blank"
-              rel="noreferrer"
-              className="px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 flex items-center gap-1.5 transition"
-            >
-              <MessageSquare className="w-4 h-4" />
-              <span>WhatsApp Support</span>
-            </a>
-
-            <button
-              onClick={() => {
-                setAccountModalSection("dashboard");
-                setShowAccountModal(true);
-              }}
-              className="hover:text-white transition cursor-pointer"
-            >
-              আমার অ্যাকাউন্ট
-            </button>
-
-            <button
-              onClick={() => setShowTrackModal(true)}
-              className="hover:text-white transition cursor-pointer"
-            >
-              ট্র্যাক অর্ডার
-            </button>
-
-            <button
-              onClick={() => setShowAdminPanel(true)}
-              className="hover:text-cyan-400 transition cursor-pointer flex items-center gap-1"
-            >
-              <Lock className="w-3.5 h-3.5" />
-              <span>অ্যাডমিন লগইন</span>
-            </button>
-          </div>
+          {/* Crawlable Footer Sitemap Links */}
+          <nav
+            aria-label="ফুটার সাইটম্যাপ লিংক"
+            className="pt-4 border-t border-slate-900 flex flex-wrap items-center justify-center md:justify-between gap-3 text-[11px] text-slate-400"
+          >
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <a
+                href="/player-packs"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setActiveTab("player_pack");
+                  document.getElementById("section-block-player_pack")?.scrollIntoView({ behavior: "smooth" });
+                }}
+                className="hover:text-cyan-300 transition"
+              >
+                eFootball Player Packs BD
+              </a>
+              <span>•</span>
+              <a
+                href="/coin-combos"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setActiveTab("combo");
+                  document.getElementById("section-block-combo")?.scrollIntoView({ behavior: "smooth" });
+                }}
+                className="hover:text-cyan-300 transition"
+              >
+                eFootball Coin Combos BD
+              </a>
+              <span>•</span>
+              <a
+                href="/regular-coins"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setActiveTab("regular");
+                  document.getElementById("section-block-regular")?.scrollIntoView({ behavior: "smooth" });
+                }}
+                className="hover:text-cyan-300 transition"
+              >
+                eFootball Coins Price BD
+              </a>
+              <span>•</span>
+              <a
+                href="/how-to-order"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setShowHowToOrderModal(true);
+                }}
+                className="hover:text-cyan-300 transition"
+              >
+                কিভাবে অর্ডার করবেন?
+              </a>
+              <span>•</span>
+              <a
+                href="#seo-faq-guide"
+                className="hover:text-cyan-300 transition"
+              >
+                FAQ ও নিয়মাবলী
+              </a>
+              <span>•</span>
+              <a href="/sitemap.xml" className="hover:text-cyan-300 transition">
+                Sitemap
+              </a>
+            </div>
+            <p className="text-slate-500">
+              © {new Date().getFullYear()} {shopSettings.siteName} (nextgenefootball.store) — All Rights Reserved.
+            </p>
+          </nav>
         </div>
       </footer>
 
