@@ -67,6 +67,7 @@ import { PaymentLogoBadge } from "./components/PaymentLogoBadge";
 import { NotificationDropdown } from "./components/NotificationDropdown";
 import { HowToOrderVideoModal } from "./components/HowToOrderVideoModal";
 import { SeoContentSection } from "./components/SeoContentSection";
+import { LiveOrderNewsTicker } from "./components/LiveOrderNewsTicker";
 import { resolveSeoViewKey, getSeoMetaForView, applySeoMetaToDom } from "./utils/seo";
 import { sendAutomaticAdminOrderAlert, sendCustomerOrderPlacedEmail } from "./utils/autoNotify";
 import { 
@@ -979,7 +980,10 @@ export default function App() {
 
       <main id="main-content" className="flex-1 flex flex-col w-full">
       {/* OFFERS & PACKAGES SHOWCASE */}
-      <section id="packages-showcase-section" aria-label="eFootball কয়েন ও প্লেয়ার প্যাক তালিকা" className="relative z-10 max-w-6xl mx-auto px-4 pt-5 pb-10 space-y-6 w-full scroll-mt-20">
+      <section id="packages-showcase-section" aria-label="eFootball কয়েন ও প্লেয়ার প্যাক তালিকা" className="relative z-10 max-w-6xl mx-auto px-4 pt-3.5 pb-10 space-y-4 w-full scroll-mt-20">
+        {/* LIVE ORDER NEWS TICKER (Last 3 Customers News-Channel Announcement) */}
+        <LiveOrderNewsTicker />
+
         {/* TOP SEARCH, CATEGORY & SORT FILTER BAR (With Live Smart Search Dropdown) */}
         <div className="p-3 sm:p-3.5 rounded-2xl bg-slate-900/95 border border-slate-800 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shadow-lg relative z-30">
           {/* Category Quick Select */}

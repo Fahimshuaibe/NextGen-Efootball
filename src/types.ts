@@ -301,3 +301,28 @@ export interface LiveChatMessage {
   timestamp: number;
   read?: boolean;
 }
+
+export interface AutoOrderNewsOverride {
+  headline?: string;
+  badgeText?: string;
+  hidden?: boolean;
+}
+
+export interface CustomNewsTickerItem {
+  id: string;
+  headline: string;
+  badgeText: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface NewsTickerConfig {
+  isEnabled: boolean;
+  showAutoLastOrders: boolean;
+  autoOrderCount: number;
+  autoOrderOverrides: Record<string, AutoOrderNewsOverride>;
+  customItems: CustomNewsTickerItem[];
+  updatedAt?: string;
+}
+

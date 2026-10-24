@@ -13,8 +13,12 @@ import {
   CatalogProduct,
   CatalogSection,
   PaymentOptionConfig,
-  CartItem
+  CartItem,
+  NewsTickerConfig,
+  CustomNewsTickerItem,
+  AutoOrderNewsOverride
 } from "../types";
+import { DEFAULT_NEWS_TICKER_CONFIG } from "./orderNews";
 import { triggerDesktopNotification, playOrderNotificationSound } from "./notification";
 import { SITE, PAYMENTS } from "../config";
 import { convertBnToEnDigits, formatBdWhatsappForUrl, toBn } from "./order";
@@ -44,6 +48,7 @@ const DELETED_CUSTOMERS_KEY = "nextgen_deleted_customers_v1";
 const CATALOG_SECTIONS_KEY = "nextgen_catalog_sections_v3";
 const CATALOG_PRODUCTS_KEY = "nextgen_catalog_products_v3";
 const PAYMENT_OPTIONS_KEY = "nextgen_payment_options_v3";
+const NEWS_TICKER_CONFIG_KEY = "nextgen_news_ticker_config_v1";
 
 const KEY_EVENT_MAP: Record<string, string> = {
   [STORAGE_KEY]: "nextgen_orders_updated",
@@ -59,6 +64,7 @@ const KEY_EVENT_MAP: Record<string, string> = {
   [DELETED_CUSTOMERS_KEY]: "nextgen_orders_updated",
   [ADMIN_STATUS_KEY]: "nextgen_admin_status_changed",
   [NOTIFICATION_LOGS_KEY]: "nextgen_notification_logs_updated",
+  [NEWS_TICKER_CONFIG_KEY]: "nextgen_news_ticker_updated",
 };
 
 function persistKey(key: string, value: any, customEventName?: string, eventDetail?: any): void {
@@ -1713,6 +1719,139 @@ export function broadcastAdminAnnouncement(params: {
   };
   saveAppNotification(notif);
   return notif;
+}
+
+// ===== 10.5 LIVE NEWS BAR / TICKER ADMIN CONFIGURATION =====
+export function getNewsTickerConfig(): NewsTickerConfig {
+  try {
+    const raw = localStorage.getItem(NEWS_TICKER_CONFIG_KEY);
+    if (!raw) {
+      return DEFAULT_NEWS_TICKER_CONFIG;
+    }
+    let parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.payloadJson === "string") {
+      parsed = JSON.parse(parsed.payloadJson);
+    }
+    if (!parsed || typeof parsed !== "object") {
+      return DEFAULT_NEWS_TICKER_CONFIG;
+    }
+    return {
+      isEnabled: parsed.isEnabled !== undefined ? Boolean(parsed.isEnabled) : true,
+      showAutoLastOrders:
+        parsed.showAutoLastOrders !== undefined ? Boolean(parsed.showAutoLastOrders) : true,
+      autoOrderCount:
+        typeof parsed.autoOrderCount === "number" && parsed.autoOrderCount > 0
+          ? parsed.autoOrderCount
+          : 3,
+      autoOrderOverrides:
+        parsed.autoOrderOverrides && typeof parsed.autoOrderOverrides === "object"
+          ? parsed.autoOrderOverrides
+          : {},
+      customItems: Array.isArray(parsed.customItems) ? parsed.customItems : [],
+      updatedAt: parsed.updatedAt,
+    };
+  } catch {
+    return DEFAULT_NEWS_TICKER_CONFIG;
+  }
+}
+
+export function saveNewsTickerConfig(config: NewsTickerConfig): NewsTickerConfig {
+  const updated: NewsTickerConfig = {
+    ...DEFAULT_NEWS_TICKER_CONFIG,
+    ...config,
+    updatedAt: new Date().toISOString(),
+  };
+  persistKey(NEWS_TICKER_CONFIG_KEY, updated, "nextgen_news_ticker_updated", updated);
+  return updated;
+}
+
+export function updateNewsTickerConfig(patch: Partial<NewsTickerConfig>): NewsTickerConfig {
+  const current = getNewsTickerConfig();
+  return saveNewsTickerConfig({
+    ...current,
+    ...patch,
+  });
+}
+
+export function addCustomNewsTickerItem(params: {
+  headline: string;
+  badgeText?: string;
+  isActive?: boolean;
+  onlyThisItem?: boolean;
+}): NewsTickerConfig {
+  const current = getNewsTickerConfig();
+  const cleanHeadline = params.headline.trim();
+  if (!cleanHeadline) return current;
+
+  const newItem: CustomNewsTickerItem = {
+    id: `news_custom_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    headline: cleanHeadline,
+    badgeText: (params.badgeText || "জরুরি ঘোষণা").trim() || "জরুরি ঘোষণা",
+    isActive: params.isActive !== undefined ? params.isActive : true,
+    createdAt: new Date().toISOString(),
+  };
+
+  if (params.onlyThisItem) {
+    // Pause other custom items and disable auto 3 orders so ONLY this 1 item runs in the news bar
+    const pausedOthers = current.customItems.map((it) => ({ ...it, isActive: false }));
+    return saveNewsTickerConfig({
+      ...current,
+      isEnabled: true,
+      showAutoLastOrders: false,
+      customItems: [newItem, ...pausedOthers],
+    });
+  }
+
+  return saveNewsTickerConfig({
+    ...current,
+    isEnabled: true,
+    customItems: [newItem, ...current.customItems],
+  });
+}
+
+export function updateCustomNewsTickerItem(
+  id: string,
+  updates: Partial<CustomNewsTickerItem>
+): NewsTickerConfig {
+  const current = getNewsTickerConfig();
+  const nextItems = current.customItems.map((it) =>
+    it.id === id
+      ? {
+          ...it,
+          ...updates,
+          updatedAt: new Date().toISOString(),
+        }
+      : it
+  );
+  return saveNewsTickerConfig({
+    ...current,
+    customItems: nextItems,
+  });
+}
+
+export function deleteCustomNewsTickerItem(id: string): NewsTickerConfig {
+  const current = getNewsTickerConfig();
+  return saveNewsTickerConfig({
+    ...current,
+    customItems: current.customItems.filter((it) => it.id !== id),
+  });
+}
+
+export function saveAutoOrderNewsOverride(
+  itemId: string,
+  override: AutoOrderNewsOverride | null
+): NewsTickerConfig {
+  const current = getNewsTickerConfig();
+  const nextOverrides = { ...(current.autoOrderOverrides || {}) };
+  if (!override) {
+    delete nextOverrides[itemId];
+  } else {
+    nextOverrides[itemId] = override;
+  }
+  return saveNewsTickerConfig({
+    ...current,
+    autoOrderOverrides: nextOverrides,
+  });
 }
 
 // ===== 11. DYNAMIC CATALOG SECTIONS & PRODUCTS MANAGEMENT =====

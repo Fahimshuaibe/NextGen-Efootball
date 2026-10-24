@@ -7,7 +7,8 @@ import {
   CustomerAccount, 
   ShopSettings,
   PaymentOptionConfig,
-  CartItem
+  CartItem,
+  NewsTickerConfig
 } from "../types";
 import { 
   getOrders, 
@@ -45,8 +46,18 @@ import {
   togglePaymentMethod,
   exportFullStoreBackup,
   importFullStoreBackup,
-  forceSyncAllToServerAndCloud
+  forceSyncAllToServerAndCloud,
+  getNewsTickerConfig,
+  updateNewsTickerConfig,
+  addCustomNewsTickerItem,
+  updateCustomNewsTickerItem,
+  deleteCustomNewsTickerItem,
+  saveAutoOrderNewsOverride
 } from "../utils/storage";
+import {
+  getLatestThreeOrderNews,
+  buildActiveNewsTickerItems
+} from "../utils/orderNews";
 import { 
   playOrderNotificationSound, 
   requestNotificationPermission, 
@@ -107,7 +118,8 @@ import {
   Minus,
   Download,
   Upload,
-  UserPlus
+  UserPlus,
+  Radio
 } from "lucide-react";
 import {
   sendTestAutoWhatsappAlert,
@@ -286,6 +298,18 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
   const [announcementFeedback, setAnnouncementFeedback] = useState<string | null>(null);
   const [allAppNotifs, setAllAppNotifs] = useState(() => getAppNotifications());
 
+  // Live News Bar / Ticker Admin Control State
+  const [newsTickerConfig, setNewsTickerConfigState] = useState<NewsTickerConfig>(() => getNewsTickerConfig());
+  const [newTickerHeadline, setNewTickerHeadline] = useState("");
+  const [newTickerBadge, setNewTickerBadge] = useState("জরুরি ঘোষণা");
+  const [editingTickerItem, setEditingTickerItem] = useState<{
+    id: string;
+    headline: string;
+    badgeText: string;
+    isAutoOrder?: boolean;
+  } | null>(null);
+  const [tickerFeedback, setTickerFeedback] = useState<string | null>(null);
+
   // Customer accounts & Admin user management state
   const [customers, setCustomers] = useState<CustomerAccount[]>([]);
   const [customerSearch, setCustomerSearch] = useState("");
@@ -326,6 +350,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
     setSecConfig(getAdminSecurityConfig());
     setShopSettingsState(getShopSettings());
     setAllAppNotifs(getAppNotifications());
+    setNewsTickerConfigState(getNewsTickerConfig());
   };
 
   useEffect(() => {
@@ -343,6 +368,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
     window.addEventListener("nextgen_user_account_updated", handleUpdate);
     window.addEventListener("nextgen_app_notifications_changed", handleUpdate);
     window.addEventListener("nextgen_payment_options_updated", handleUpdate);
+    window.addEventListener("nextgen_news_ticker_updated", handleUpdate);
     return () => {
       window.removeEventListener("nextgen_orders_updated", handleUpdate);
       window.removeEventListener("nextgen_blocked_users_updated", handleUpdate);
@@ -350,6 +376,7 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
       window.removeEventListener("nextgen_user_account_updated", handleUpdate);
       window.removeEventListener("nextgen_app_notifications_changed", handleUpdate);
       window.removeEventListener("nextgen_payment_options_updated", handleUpdate);
+      window.removeEventListener("nextgen_news_ticker_updated", handleUpdate);
     };
   }, [isAuthenticated]);
 
@@ -1160,16 +1187,17 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
           <button
             onClick={() => {
               setAllAppNotifs(getAppNotifications());
+              setNewsTickerConfigState(getNewsTickerConfig());
               setActiveTab("announcements");
             }}
             className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer whitespace-nowrap ${
               activeTab === "announcements"
-                ? "bg-cyan-500 text-black shadow-md shadow-cyan-500/20"
-                : "text-slate-400 hover:text-white hover:bg-slate-800"
+                ? "bg-gradient-to-r from-rose-500 via-amber-500 to-cyan-500 text-black shadow-md shadow-rose-500/20"
+                : "text-amber-300 bg-amber-500/10 border border-amber-500/30 hover:bg-amber-500/20"
             }`}
           >
-            <Megaphone className="w-4 h-4" />
-            <span>📢 নোটিফিকেশন ও অফার ঘোষণা</span>
+            <Radio className="w-4 h-4" />
+            <span>📺 লাইভ নিউজ বার ও নোটিফিকেশন</span>
           </button>
 
           <button
@@ -3744,9 +3772,528 @@ export function AdminPanel({ onClose, onViewReceipt }: Props) {
             </div>
           )}
 
-          {/* TAB 7: ANNOUNCEMENTS & LIMITED-TIME OFFERS BROADCAST */}
+          {/* TAB 7: LIVE NEWS BAR CONTROL & IN-APP NOTIFICATIONS BROADCAST */}
           {activeTab === "announcements" && (
             <div className="max-w-4xl mx-auto space-y-6">
+              {/* SECTION A: LIVE TV NEWS BAR / TICKER ADMIN CONTROL PANEL */}
+              <div className="p-6 rounded-2xl bg-slate-900 border-2 border-cyan-500/35 space-y-5 shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-rose-400 flex items-center justify-center shrink-0">
+                      <Radio className="w-6 h-6 animate-pulse" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-extrabold text-white flex items-center gap-2">
+                        <span>📺 হেডার লাইভ নিউজ বার কন্ট্রোল প্যানেল</span>
+                      </h3>
+                      <p className="text-xs text-slate-300 mt-0.5">
+                        এখান থেকে হেডারের নিচে থাকা লাইভ নিউজ চ্যানেল বারে যেকোনো গুরুত্বপূর্ণ তথ্য শেয়ার, এডিট এবং লাস্ট ৩টি অটোমেটিক অর্ডার কন্ট্রোল করতে পারবেন (১টি থেকে ১০টি বা যতগুলো খুশি তথ্য চালাতে পারবেন)
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextEnabled = !newsTickerConfig.isEnabled;
+                      const updated = updateNewsTickerConfig({ isEnabled: nextEnabled });
+                      setNewsTickerConfigState(updated);
+                      setTickerFeedback(
+                        nextEnabled
+                          ? "✅ হেডার লাইভ নিউজ বার চালু করা হয়েছে!"
+                          : "⏸️ হেডার লাইভ নিউজ বার সাময়িক বন্ধ করা হয়েছে।"
+                      );
+                      setTimeout(() => setTickerFeedback(null), 4000);
+                    }}
+                    className={`px-4 py-2 rounded-xl text-xs font-extrabold transition cursor-pointer shrink-0 border ${
+                      newsTickerConfig.isEnabled
+                        ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30"
+                        : "bg-rose-500/20 border-rose-500/40 text-rose-300 hover:bg-rose-500/30"
+                    }`}
+                  >
+                    {newsTickerConfig.isEnabled ? "🟢 নিউজ বার চালু আছে" : "🔴 নিউজ বার বন্ধ আছে"}
+                  </button>
+                </div>
+
+                {tickerFeedback && (
+                  <div className="p-3 rounded-xl bg-emerald-950/90 border border-emerald-500/50 text-emerald-300 text-xs font-bold flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span>{tickerFeedback}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setTickerFeedback(null)}
+                      className="text-slate-400 hover:text-white cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+
+                {/* 1. Automatic Last 3 Orders Control Box */}
+                <div className="p-4 rounded-2xl bg-slate-950 border border-cyan-500/30 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="text-xs sm:text-sm font-extrabold text-cyan-300 flex items-center gap-2">
+                        <span>⚡ অটোমেটিক লাস্ট ৩টি অর্ডার কন্ট্রোল (Auto Order News)</span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                            newsTickerConfig.showAutoLastOrders
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                              : "bg-slate-800 text-slate-400 border border-slate-700"
+                          }`}
+                        >
+                          {newsTickerConfig.showAutoLastOrders ? "অটো অর্ডার চালু" : "অটো অর্ডার বন্ধ"}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 leading-relaxed">
+                        চালু থাকলে সর্বশেষ ৩ জন কাস্টমারের অর্ডার অটোমেটিক নিউজ বারে চলবে। আপনি যদি শুধু আপনার দেওয়া ১টি বা কয়েকটি নির্দিষ্ট তথ্য নিউজ বারে রাখতে চান, তবে এটি বন্ধ (OFF) করে দিতে পারেন।
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <select
+                        aria-label="অটো অর্ডার সংখ্যা"
+                        value={newsTickerConfig.autoOrderCount || 3}
+                        onChange={(e) => {
+                          const count = Number(e.target.value) || 3;
+                          const updated = updateNewsTickerConfig({
+                            autoOrderCount: count,
+                            showAutoLastOrders: true,
+                          });
+                          setNewsTickerConfigState(updated);
+                          setTickerFeedback(`✅ অটোমেটিক লাস্ট ${toBn(count)}টি অর্ডার নিউজ বারে সেট করা হয়েছে!`);
+                          setTimeout(() => setTickerFeedback(null), 3500);
+                        }}
+                        className="px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs font-bold text-white focus:outline-none focus:border-cyan-400 cursor-pointer"
+                      >
+                        <option value={1}>লাস্ট ১টি অর্ডার</option>
+                        <option value={2}>লাস্ট ২টি অর্ডার</option>
+                        <option value={3}>লাস্ট ৩টি অর্ডার (ডিফল্ট)</option>
+                        <option value={5}>লাস্ট ৫টি অর্ডার</option>
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextVal = !newsTickerConfig.showAutoLastOrders;
+                          const updated = updateNewsTickerConfig({ showAutoLastOrders: nextVal });
+                          setNewsTickerConfigState(updated);
+                          setTickerFeedback(
+                            nextVal
+                              ? "✅ লাস্ট ৩টি অটোমেটিক অর্ডার পুনরায় নিউজ বারে চালু করা হয়েছে!"
+                              : "🎯 অটোমেটিক অর্ডার বন্ধ করা হয়েছে — এখন শুধু আপনার কাস্টম তথ্য নিউজ বারে চলবে!"
+                          );
+                          setTimeout(() => setTickerFeedback(null), 4000);
+                        }}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-extrabold transition cursor-pointer ${
+                          newsTickerConfig.showAutoLastOrders
+                            ? "bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40"
+                            : "bg-gradient-to-r from-cyan-500 to-emerald-500 text-black shadow-md"
+                        }`}
+                      >
+                        {newsTickerConfig.showAutoLastOrders
+                          ? "অটো অর্ডার বন্ধ করুন (OFF)"
+                          : "অটো ৩টি অর্ডার চালু করুন (ON)"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Preview & Edit Automatic Last 3 Orders */}
+                  {newsTickerConfig.showAutoLastOrders && (
+                    <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                      <div className="flex items-center justify-between text-[11px] text-slate-400">
+                        <span className="font-bold text-slate-300">
+                          বর্তমানে চলমান অটোমেটিক অর্ডার আপডেটসমূহ (চাইলে যেকোনোটি এডিট বা হাইড করতে পারবেন):
+                        </span>
+                        {Object.keys(newsTickerConfig.autoOrderOverrides || {}).length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = updateNewsTickerConfig({ autoOrderOverrides: {} });
+                              setNewsTickerConfigState(updated);
+                              setTickerFeedback("✅ সব অটো অর্ডার ডিফল্ট লেখায় রিসেট করা হয়েছে।");
+                              setTimeout(() => setTickerFeedback(null), 3000);
+                            }}
+                            className="text-cyan-400 hover:underline font-bold cursor-pointer"
+                          >
+                            🔄 অটো অর্ডার রিসেট করুন
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        {getLatestThreeOrderNews(orders, newsTickerConfig.autoOrderCount || 3).map((ordItem) => {
+                          const override = newsTickerConfig.autoOrderOverrides?.[ordItem.id];
+                          const isHidden = Boolean(override?.hidden);
+                          const effectiveHeadline = override?.headline?.trim() || ordItem.headline;
+                          const effectiveBadge = override?.badgeText?.trim() || ordItem.badgeText;
+
+                          return (
+                            <div
+                              key={ordItem.id}
+                              className={`p-3 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs ${
+                                isHidden
+                                  ? "bg-slate-900/40 border-slate-800 opacity-60"
+                                  : "bg-slate-900/90 border-slate-800"
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+                                <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold shrink-0">
+                                  {effectiveBadge}
+                                </span>
+                                <span className="text-slate-100 font-semibold break-words">
+                                  {effectiveHeadline}
+                                </span>
+                                {override?.headline && (
+                                  <span className="text-[10px] text-amber-300 font-bold">(এডিটেড)</span>
+                                )}
+                              </div>
+
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setEditingTickerItem({
+                                      id: ordItem.id,
+                                      headline: effectiveHeadline,
+                                      badgeText: effectiveBadge,
+                                      isAutoOrder: true,
+                                    })
+                                  }
+                                  className="px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                  <span>এডিট</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = saveAutoOrderNewsOverride(ordItem.id, {
+                                      ...override,
+                                      hidden: !isHidden,
+                                    });
+                                    setNewsTickerConfigState(updated);
+                                  }}
+                                  className={`px-2.5 py-1 rounded-lg font-bold text-[11px] cursor-pointer border ${
+                                    isHidden
+                                      ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+                                      : "bg-slate-800 border-slate-700 text-slate-300 hover:text-white"
+                                  }`}
+                                >
+                                  {isHidden ? "চালু করুন" : "লুকান"}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. Add Custom News / Important Information to News Bar */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-slate-950 border border-amber-500/30 space-y-4">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <h4 className="text-xs sm:text-sm font-extrabold text-amber-300 flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span>➕ নিউজ বারে নতুন গুরুত্বপূর্ণ তথ্য বা ঘোষণা যুক্ত করুন (১টি থেকে ১০টি+ যত খুশি)</span>
+                    </h4>
+                    <span className="text-[11px] text-slate-400">
+                      এখানে কোনো ১, ২, ৩ নম্বর দেখাবে না — সরাসরি সুন্দর নিউজ আকারে চলবে
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        নিউজ বারে কী লেখা দেখাতে চান? (Headline Text) *
+                      </label>
+                      <input
+                        type="text"
+                        value={newTickerHeadline}
+                        onChange={(e) => setNewTickerHeadline(e.target.value)}
+                        placeholder="যেমন: 🔥 আজ রাত ১২টা পর্যন্ত সকল কয়েন প্যাকে বিশেষ ডিসকাউন্ট চলছে! এখনি অর্ডার করুন।"
+                        className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-white text-xs focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">
+                        ব্যাজ ট্যাগ (Badge)
+                      </label>
+                      <input
+                        type="text"
+                        value={newTickerBadge}
+                        onChange={(e) => setNewTickerBadge(e.target.value)}
+                        placeholder="জরুরি ঘোষণা / স্পেশাল অফার"
+                        className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-amber-200 font-bold text-xs focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Quick Badge Presets */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] text-slate-400 mr-1">দ্রুত ব্যাজ নির্বাচন:</span>
+                    {["জরুরি ঘোষণা", "স্পেশাল অফার", "গুরুত্বপূর্ণ তথ্য", "ব্রেকিং নিউজ", "অর্ডার আপডেট"].map((b) => (
+                      <button
+                        key={b}
+                        type="button"
+                        onClick={() => setNewTickerBadge(b)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer border ${
+                          newTickerBadge === b
+                            ? "bg-amber-500 text-black border-amber-400"
+                            : "bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-700"
+                        }`}
+                      >
+                        {b}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newTickerHeadline.trim()) return;
+                        const updated = addCustomNewsTickerItem({
+                          headline: newTickerHeadline,
+                          badgeText: newTickerBadge,
+                          onlyThisItem: false,
+                        });
+                        setNewsTickerConfigState(updated);
+                        setNewTickerHeadline("");
+                        setTickerFeedback("✅ নতুন তথ্যটি নিউজ বারের তালিকায় যোগ করা হয়েছে!");
+                        setTimeout(() => setTickerFeedback(null), 4000);
+                      }}
+                      className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-emerald-500 hover:from-cyan-400 hover:to-emerald-400 text-black font-extrabold text-xs transition cursor-pointer shadow-lg flex items-center gap-1.5"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>নিউজ বারে যোগ করুন (তালিকায় যুক্ত হবে)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newTickerHeadline.trim()) return;
+                        const updated = addCustomNewsTickerItem({
+                          headline: newTickerHeadline,
+                          badgeText: newTickerBadge,
+                          onlyThisItem: true,
+                        });
+                        setNewsTickerConfigState(updated);
+                        setNewTickerHeadline("");
+                        setTickerFeedback("🎯 শুধুমাত্র এই ১টি তথ্যই এখন নিউজ বারে চলমান রাখা হয়েছে (অটো অর্ডার বন্ধ করা হয়েছে)!");
+                        setTimeout(() => setTickerFeedback(null), 4500);
+                      }}
+                      className="px-4 py-2.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-extrabold text-xs transition cursor-pointer flex items-center gap-1.5"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      <span>🎯 শুধু এই ১টি তথ্যই নিউজ বারে চালান</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Inline Edit Modal / Box for Custom or Auto Order News Item */}
+                {editingTickerItem && (
+                  <div className="p-4 rounded-2xl bg-cyan-950/40 border-2 border-cyan-400/60 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h5 className="text-xs font-extrabold text-cyan-300 flex items-center gap-1.5">
+                        <Edit2 className="w-3.5 h-3.5" />
+                        <span>
+                          {editingTickerItem.isAutoOrder
+                            ? "অটোমেটিক অর্ডার নিউজ এডিট করুন"
+                            : "নিউজ বারের তথ্য এডিট করুন"}
+                        </span>
+                      </h5>
+                      <button
+                        type="button"
+                        onClick={() => setEditingTickerItem(null)}
+                        className="text-slate-400 hover:text-white text-xs cursor-pointer"
+                      >
+                        ✕ বাতিল
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="sm:col-span-2">
+                        <label className="block text-[11px] text-slate-300 mb-1">নিউজের লেখা (Headline):</label>
+                        <input
+                          type="text"
+                          value={editingTickerItem.headline}
+                          onChange={(e) =>
+                            setEditingTickerItem({ ...editingTickerItem, headline: e.target.value })
+                          }
+                          className="w-full px-3 py-2 bg-slate-900 border border-cyan-500/50 rounded-xl text-white text-xs focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-slate-300 mb-1">ব্যাজ ট্যাগ (Badge):</label>
+                        <input
+                          type="text"
+                          value={editingTickerItem.badgeText}
+                          onChange={(e) =>
+                            setEditingTickerItem({ ...editingTickerItem, badgeText: e.target.value })
+                          }
+                          className="w-full px-3 py-2 bg-slate-900 border border-cyan-500/50 rounded-xl text-cyan-200 font-bold text-xs focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditingTickerItem(null)}
+                        className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold cursor-pointer"
+                      >
+                        বাতিল
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!editingTickerItem.headline.trim()) return;
+                          if (editingTickerItem.isAutoOrder) {
+                            const updated = saveAutoOrderNewsOverride(editingTickerItem.id, {
+                              headline: editingTickerItem.headline.trim(),
+                              badgeText: editingTickerItem.badgeText.trim() || "অর্ডার আপডেট",
+                              hidden: false,
+                            });
+                            setNewsTickerConfigState(updated);
+                          } else {
+                            const updated = updateCustomNewsTickerItem(editingTickerItem.id, {
+                              headline: editingTickerItem.headline.trim(),
+                              badgeText: editingTickerItem.badgeText.trim() || "জরুরি ঘোষণা",
+                            });
+                            setNewsTickerConfigState(updated);
+                          }
+                          setEditingTickerItem(null);
+                          setTickerFeedback("✅ নিউজ বারের তথ্য সফলভাবে আপডেট করা হয়েছে!");
+                          setTimeout(() => setTickerFeedback(null), 3500);
+                        }}
+                        className="px-4 py-1.5 rounded-lg bg-cyan-500 text-black font-extrabold text-xs cursor-pointer"
+                      >
+                        💾 পরিবর্তন সেভ করুন
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. List of Admin Custom News Bar Items */}
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <h4 className="text-xs font-extrabold text-white flex items-center gap-2">
+                      <Megaphone className="w-4 h-4 text-amber-400" />
+                      <span>
+                        এডমিনের যোগ করা কাস্টম নিউজ তালিকা ({toBn(newsTickerConfig.customItems.length)} টি)
+                      </span>
+                    </h4>
+                    <span className="text-[11px] text-cyan-300 font-bold">
+                      বর্তমানে নিউজ বারে মোট চলমান আইটেম:{" "}
+                      {toBn(buildActiveNewsTickerItems(orders, newsTickerConfig).length)} টি
+                    </span>
+                  </div>
+
+                  {newsTickerConfig.customItems.length === 0 ? (
+                    <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-center text-xs text-slate-400">
+                      এখনো কোনো কাস্টম নিউজ যোগ করা হয়নি। উপরের ফর্ম থেকে ১টি বা ১০টি যত খুশি তথ্য যোগ করতে পারেন।
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {newsTickerConfig.customItems.map((item) => (
+                        <div
+                          key={item.id}
+                          className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs ${
+                            item.isActive
+                              ? "bg-slate-950 border-amber-500/30"
+                              : "bg-slate-950/50 border-slate-800 opacity-60"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+                            <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-extrabold shrink-0">
+                              {item.badgeText}
+                            </span>
+                            <span className="text-white font-bold break-words">{item.headline}</span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingTickerItem({
+                                  id: item.id,
+                                  headline: item.headline,
+                                  badgeText: item.badgeText,
+                                  isAutoOrder: false,
+                                })
+                              }
+                              className="px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                              <span>এডিট</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = updateCustomNewsTickerItem(item.id, {
+                                  isActive: !item.isActive,
+                                });
+                                setNewsTickerConfigState(updated);
+                              }}
+                              className={`px-2.5 py-1 rounded-lg font-bold text-[11px] cursor-pointer border ${
+                                item.isActive
+                                  ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+                                  : "bg-slate-800 border-slate-700 text-slate-400"
+                              }`}
+                            >
+                              {item.isActive ? "চালু আছে" : "বন্ধ আছে"}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                // Keep ONLY this 1 item active in the news bar
+                                const nextItems = newsTickerConfig.customItems.map((it) => ({
+                                  ...it,
+                                  isActive: it.id === item.id,
+                                }));
+                                const updated = updateNewsTickerConfig({
+                                  isEnabled: true,
+                                  showAutoLastOrders: false,
+                                  customItems: nextItems,
+                                });
+                                setNewsTickerConfigState(updated);
+                                setTickerFeedback("🎯 এখন শুধুমাত্র এই ১টি তথ্যই নিউজ বারে চলমান রাখা হয়েছে!");
+                                setTimeout(() => setTickerFeedback(null), 4000);
+                              }}
+                              className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-[11px] cursor-pointer"
+                              title="অন্য সব বন্ধ করে শুধু এই ১টি তথ্য নিউজ বারে চালান"
+                            >
+                              শুধু এটি চালান
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = deleteCustomNewsTickerItem(item.id);
+                                setNewsTickerConfigState(updated);
+                              }}
+                              className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 transition cursor-pointer"
+                              title="মুছে ফেলুন"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* SECTION B: IN-APP BELL NOTIFICATIONS BROADCAST */}
               <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 space-y-5">
                 <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
                   <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center justify-center">

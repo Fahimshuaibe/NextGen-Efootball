@@ -17,3 +17,28 @@
   }
 }
 
+@keyframes nextgenNewsMarquee {
+  0% {
+    transform: translate3d(0%, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.animate-news-marquee {
+  display: flex;
+  width: max-content;
+  animation: nextgenNewsMarquee 26s linear infinite;
+}
+
+.animate-news-marquee-long {
+  display: flex;
+  width: max-content;
+  animation: nextgenNewsMarquee 48s linear infinite;
+}
+
+.animate-news-marquee:hover,
+.animate-news-marquee-long:hover {
+  animation-play-state: paused;
+}
